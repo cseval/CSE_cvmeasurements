@@ -1,0 +1,314 @@
+/* ────────────────────────────────────────────────────────────────────
+   NFC-native rebuild additions (handoff §3.2 / §4.2)
+   Kept in its own file: imported after App.css in App.jsx.
+   ──────────────────────────────────────────────────────────────────── */
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* ── Station setup screen ── */
+.setup-screen {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: 0 0 max(24px, env(safe-area-inset-bottom));
+}
+
+.setup-header {
+  padding: 28px 20px 0;
+}
+
+.setup-header h1 {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.setup-sub {
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.setup-body {
+  flex: 1;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto;
+}
+
+.setup-hint {
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-top: 2px;
+}
+
+.opt {
+  color: var(--text-muted);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ── Idle screen ── */
+.idle-screen {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: 0 0 max(24px, env(safe-area-inset-bottom));
+}
+
+.idle-main {
+  flex: 1;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  overflow-y: auto;
+  text-align: center;
+}
+
+.tap-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 0 4px;
+}
+
+.tap-ring {
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  border: 3px solid var(--navy-600);
+  position: relative;
+}
+
+.tap-ring::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 3px solid rgba(46, 109, 156, 0.5);
+  animation: tap-pulse 2s ease-out infinite;
+}
+
+@keyframes tap-pulse {
+  0%   { transform: scale(0.92); opacity: 0.9; }
+  70%  { transform: scale(1.35); opacity: 0; }
+  100% { opacity: 0; }
+}
+
+.tap-prompt h1 {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.tap-sub {
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.station-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--white);
+  border: 1px solid var(--border);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.idle-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--navy-600);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 6px 8px;
+}
+
+.link-btn:active {
+  color: var(--navy-800);
+}
+
+.sync-badge {
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sync-idle    { background: var(--success-bg); color: var(--success-text); border: 1px solid var(--success); }
+.sync-syncing { background: var(--info-bg);    color: var(--info-text);    border: 1px solid var(--info); }
+.sync-pending { background: var(--warning-bg); color: var(--warning-text); border: 1px solid var(--warning); }
+.sync-offline { background: var(--danger-bg);  color: var(--danger-text);  border: 1px solid var(--danger); }
+
+.warn-banner {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning);
+  color: var(--warning-text);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.ok-banner {
+  background: var(--success-bg);
+  border: 1px solid var(--success);
+  color: var(--success-text);
+  border-radius: var(--radius-lg);
+  padding: 12px 16px;
+  font-family: var(--font-body);
+  font-size: 14px;
+}
+
+.dismiss-tap-error {
+  float: right;
+  margin: -4px -4px 0 12px;
+  background: none;
+  border: none;
+  color: var(--danger-text);
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ── Recent taps (audit trail) ── */
+.recent-taps {
+  padding: 8px 20px 0;
+}
+
+.recent-taps-label {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.recent-tap-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 6px;
+  font-family: var(--font-body);
+  font-size: 13px;
+}
+
+.recent-time {
+  color: var(--text-muted);
+  width: 84px;
+  flex-shrink: 0;
+}
+
+.recent-uid {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  flex: 1;
+  color: var(--text-primary);
+}
+
+.recent-status {
+  font-weight: 700;
+}
+
+.recent-status.ok  { color: var(--success); }
+.recent-status.bad { color: var(--danger); }
+
+.recent-sync {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.recent-sync.synced { color: var(--success); }
+
+.idle-footer {
+  padding: 12px 20px 0;
+}
+
+/* ── Subject banners (identity-free) ── */
+.subject-banner {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 12px 16px;
+  font-family: var(--font-body);
+  font-size: 15px;
+  font-weight: 700;
+  text-align: center;
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.subject-banner.test {
+  border-left: 3px solid var(--navy-600);
+  color: var(--text-secondary);
+}
+
+.subject-banner.unenrolled {
+  border-left: 3px solid var(--warning);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+/* ── Toast (mid-flow tap, transient notices) ── */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--navy-900);
+  color: #fff;
+  padding: 12px 20px;
+  border-radius: 999px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 600;
+  z-index: 50;
+  box-shadow: var(--shadow-md);
+  max-width: 90vw;
+  text-align: center;
+}

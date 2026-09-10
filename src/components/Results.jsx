@@ -1,6 +1,9 @@
 import { useState, useRef } from 'react'
 import AdjustCanvas from './AdjustCanvas.jsx'
 import BrandBar from './BrandBar.jsx'
+import { tail } from '../lib/tapProtocol.js'
+import { getRecord, loadStationConfig, patchRecord, putRecord, uuid } from '../lib/storage.js'
+import { sendCapture } from '../lib/sync.js'
 
 function cmToFtIn(cm) {
   const totalInches = cm / 2.54
@@ -21,7 +24,7 @@ const ENDPOINT_PAIRS = [
 ]
 
 function compositeAdjusted(debugImageB64, pts, baseScale, imgW, imgH) {
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     const canvas  = document.createElement('canvas')
     canvas.width  = Math.round(imgW * baseScale)
     canvas.height = Math.round(imgH * baseScale)
@@ -56,15 +59,34 @@ function compositeAdjusted(debugImageB64, pts, baseScale, imgW, imgH) {
 
 const MANUAL_KEYS = ['height_cm', 'wingspan_cm', 'hand_width_cm']
 
-export default function Results({ results, error, warnings, athlete, rowId, onRetry, onContinue }) {
+/**
+ * Results screen — the CV half of the app, carried over from the old
+ * build (annotated photo, Adjust Lines, Enter Manually). What changed:
+ * the save path. Identity is gone (no athlete object, no row id from a
+ * roster); saving writes a local capture record first (IndexedDB), then
+ * syncs in the background. Every save is a NEW trial on the server; a
+ * correction within the same visit updates the same local record.
+ */
+export default function Results({
+  results,
+  error,
+  warnings,
+  subject,
+  markerSize,
+  activeRecordId,
+  onRetry,
+  onContinue,
+  onIdle,
+  onRecordSaved,
+}) {
   const [adjusting, setAdjusting]     = useState(false)
   const [adjustedVals, setAdjusted]   = useState({})
   const [adjustedImage, setAdjImage]  = useState(null)
   const [manualEntry, setManualEntry] = useState(false)
   const [manualDraft, setManualDraft] = useState({})
   const [manualVals, setManualVals]   = useState({})
-  const [saveState, setSaveState]     = useState(rowId ? 'updated' : 'idle') // idle | saving | saved | updated | error
-  const [savedRowId, setSavedRowId]   = useState(rowId ?? null)
+  const [saveState, setSaveState]     = useState('idle') // idle | saving | saved | error
+  const [record, setRecord]           = useState(null)
   const canvasRef                     = useRef(null)
 
   const canAdjust    = !!(results?.endpoints && results?.raw_image)
@@ -73,16 +95,15 @@ export default function Results({ results, error, warnings, athlete, rowId, onRe
   const showFailure  = !!error && !manualEntry && !hasManualVals
 
   function handleAdjustChange(updated) {
-    setAdjusted(prev => ({ ...prev, ...updated }))
-    // Dragging a line re-derives these measurements from the photo, so that
-    // should win over any earlier manual entry for the same keys.
-    setManualVals(prev => {
+    setAdjusted((prev) => ({ ...prev, ...updated }))
+    // Dragging a line re-derives these measurements from the photo, so
+    // that wins over any earlier manual entry for the same keys.
+    setManualVals((prev) => {
       const next = { ...prev }
       for (const key of Object.keys(updated)) delete next[key]
       return next
     })
-    // A correction after a save needs to be re-saved, so re-arm the Save button.
-    setSaveState(prev => (prev === 'saved' || prev === 'updated') ? 'idle' : prev)
+    setSaveState((prev) => (prev === 'saved' ? 'idle' : prev))
   }
 
   function openManualEntry() {
@@ -95,7 +116,7 @@ export default function Results({ results, error, warnings, athlete, rowId, onRe
   }
 
   function handleManualChange(key, raw) {
-    setManualDraft(prev => ({ ...prev, [key]: raw }))
+    setManualDraft((prev) => ({ ...prev, [key]: raw }))
   }
 
   function handleManualApply() {
@@ -106,8 +127,7 @@ export default function Results({ results, error, warnings, athlete, rowId, onRe
     }
     setManualVals(next)
     setManualEntry(false)
-    // A correction after a save needs to be re-saved, so re-arm the Save button.
-    setSaveState(prev => (prev === 'saved' || prev === 'updated') ? 'idle' : prev)
+    setSaveState((prev) => (prev === 'saved' ? 'idle' : prev))
   }
 
   function handleManualCancel() {
@@ -130,49 +150,90 @@ export default function Results({ results, error, warnings, athlete, rowId, onRe
   }
 
   async function handleSave() {
-    if (!athlete || !display.height_cm || !display.wingspan_cm || !display.hand_width_cm) return
+    if (!display.height_cm || !display.wingspan_cm || !display.hand_width_cm) return
     setSaveState('saving')
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/save`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          player_id:     athlete.id,
-          first_name:    athlete.first_name,
-          last_name:     athlete.last_name,
-          height_cm:     display.height_cm,
-          wingspan_cm:   display.wingspan_cm,
+      const cfg = loadStationConfig() || {}
+      const now = new Date().toISOString()
+      const method = hasManualVals ? 'manual' : 'cv'
+
+      let rec
+      if (activeRecordId) {
+        // Correction within the same visit -> same local record (same
+        // server trial once synced). Never a second trial for a re-shot.
+        const existing = await getRecord('captures', activeRecordId)
+        rec = {
+          ...(existing || { id: activeRecordId }),
+          height_cm: display.height_cm,
+          wingspan_cm: display.wingspan_cm,
           hand_width_cm: display.hand_width_cm,
-          event_id:      athlete.event_id ?? null,
-          user_id:       athlete.user_id ?? null,
-        }),
-      })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        throw new Error(body.detail || `Server error ${res.status}`)
+          method,
+          saved_at: now,
+        }
+        await patchRecord('captures', rec.id, {
+          height_cm: rec.height_cm,
+          wingspan_cm: rec.wingspan_cm,
+          hand_width_cm: rec.hand_width_cm,
+          method: rec.method,
+          saved_at: now,
+        })
+      } else {
+        rec = {
+          id: uuid(),
+          raw_uid: subject?.uid || null,
+          subject_key: subject?.subject_key || null,
+          enrolled: subject?.enrolled ?? null,
+          test_mode: !!subject?.test,
+          marker_cm: markerSize,
+          height_cm: display.height_cm,
+          wingspan_cm: display.wingspan_cm,
+          hand_width_cm: display.hand_width_cm,
+          method,
+          validity: 1,
+          notes: null,
+          assessment: {},
+          station: {
+            stationId: cfg.stationId,
+            labLocation: cfg.labLocation,
+            eventSessionId: cfg.eventSessionId,
+            operator: cfg.operator,
+            readerPrefix: cfg.readerPrefix,
+          },
+          captured_at: now,
+          saved_at: now,
+          sync_status: 'pending',
+          sync_attempts: 0,
+          server_trial_ref: null,
+          last_error: null,
+        }
+        await putRecord('captures', rec)
       }
-      const data = await res.json()
-      setSavedRowId(data.id)
-      setSaveState(data.action === 'updated' ? 'updated' : 'saved')
+
+      // Local-first: the record is durable now. Try the network, but a
+      // failure only means "pending", never a lost capture.
+      setRecord(rec)
+      try {
+        const res = await sendCapture(rec)
+        setRecord({ ...rec, sync_status: 'synced', server_trial_ref: res.trial_ref ?? null })
+      } catch {
+        /* stays pending; the background queue retries with backoff */
+      }
+      setSaveState('saved')
+      onRecordSaved(rec)
     } catch (err) {
+      // The only failure that matters here: the local store itself.
       setSaveState('error')
     }
   }
 
-  function saveLabel() {
-    if (!athlete?.status) return 'Save Measurements'
-    if (!athlete.status.exists)   return 'Save Measurements'
-    if (!athlete.status.has_data) return 'Add Measurements'
-    return 'Update Measurements'
-  }
-
   const measurements = [
-    { key: 'height_cm',     label: 'Height',    cls: 'height',   imperial: v => cmToFtIn(v) },
-    { key: 'wingspan_cm',   label: 'Wingspan',  cls: 'wingspan', imperial: v => cmToFtIn(v) },
-    { key: 'hand_width_cm', label: 'Hand Span', cls: 'hand',     imperial: v => cmToIn(v)   },
+    { key: 'height_cm',     label: 'Height',    cls: 'height',   imperial: (v) => cmToFtIn(v) },
+    { key: 'wingspan_cm',   label: 'Wingspan',  cls: 'wingspan', imperial: (v) => cmToFtIn(v) },
+    { key: 'hand_width_cm', label: 'Hand Span', cls: 'hand',     imperial: (v) => cmToIn(v) },
   ]
 
-  const isAdjusted = key => key in adjustedVals || key in manualVals
+  const isAdjusted = (key) => key in adjustedVals || key in manualVals
+  const synced = record?.sync_status === 'synced'
 
   return (
     <div className="results-screen">
@@ -181,12 +242,8 @@ export default function Results({ results, error, warnings, athlete, rowId, onRe
         <h1>
           {adjusting ? 'Adjust Lines' : manualEntry ? 'Enter Measurements' : showFailure ? 'Measurement Failed' : 'Measurements'}
         </h1>
-        {adjusting && (
-          <button className="done-btn" onClick={handleDone}>Done</button>
-        )}
-        {manualEntry && (
-          <button className="done-btn" onClick={handleManualApply}>Apply</button>
-        )}
+        {adjusting && <button className="done-btn" onClick={handleDone}>Done</button>}
+        {manualEntry && <button className="done-btn" onClick={handleManualApply}>Apply</button>}
       </div>
 
       <div className="results-body">
@@ -223,7 +280,7 @@ export default function Results({ results, error, warnings, athlete, rowId, onRe
 
             {manualEntry && (
               <p className="manual-entry-hint">
-                Enter measurements directly if the camera isn't available or the detected values look wrong.
+                Enter measurements directly if the camera isn’t available or the detected values look wrong.
               </p>
             )}
 
@@ -242,7 +299,7 @@ export default function Results({ results, error, warnings, athlete, rowId, onRe
                         step="0.1"
                         placeholder="—"
                         value={manualDraft[key]}
-                        onChange={e => handleManualChange(key, e.target.value)}
+                        onChange={(e) => handleManualChange(key, e.target.value)}
                       />
                       <span className="value-imperial">{liveImperial}</span>
                     </span>
@@ -266,7 +323,7 @@ export default function Results({ results, error, warnings, athlete, rowId, onRe
             })}
 
             {results?.px_per_cm && !manualEntry && (
-              <p className="scale-note">Scale: {results.px_per_cm} px / cm</p>
+              <p className="scale-note">Scale: {results.px_per_cm} px / cm · marker {markerSize} cm</p>
             )}
           </>
         )}
@@ -282,42 +339,47 @@ export default function Results({ results, error, warnings, athlete, rowId, onRe
           <button className="adjust-btn" onClick={handleManualCancel}>Cancel</button>
         ) : (
           <>
-            {athlete && !adjusting && (
-              <div className="athlete-banner">
-                {athlete.first_name} {athlete.last_name}
+            {subject?.test && (
+              <div className="subject-banner test">TEST MODE — no subject attached</div>
+            )}
+            {!subject?.test && subject?.uid && (
+              <div className={`subject-banner ${subject.enrolled === false ? 'unenrolled' : 'enrolled'}`}>
+                Tag {tail(subject.uid, 4)}
+                {subject.enrolled === false && ' — NOT ENROLLED (reconcile later)'}
+                {subject.enrolled === true && ' — recognized'}
+                {subject.enrolled == null && !subject.resolved_online && ' — status unknown (offline)'}
               </div>
             )}
 
-            {athlete && !adjusting && saveState === 'idle' && (
+            {saveState === 'idle' && (
               <button
                 className="retry-btn"
                 onClick={handleSave}
                 disabled={!display.height_cm || !display.wingspan_cm || !display.hand_width_cm}
               >
-                {saveLabel()}
+                {activeRecordId ? 'Update Measurements (same trial)' : 'Save Measurements'}
               </button>
             )}
 
-            {saveState === 'saving' && (
-              <button className="retry-btn" disabled>Saving…</button>
-            )}
+            {saveState === 'saving' && <button className="retry-btn" disabled>Saving…</button>}
 
-            {(saveState === 'saved' || saveState === 'updated') && (
+            {saveState === 'saved' && (
               <>
                 <div className="save-success">
-                  {saveState === 'updated' ? 'Measurements updated' : 'Measurements saved'}
+                  {synced ? 'Measurements saved & synced' : 'Measurements saved locally — will sync'}
                 </div>
                 {onContinue && (
-                  <button className="retry-btn" onClick={() => onContinue(savedRowId, display)}>
+                  <button className="retry-btn" onClick={() => onContinue(record.id, display)}>
                     Add Additional Info
                   </button>
                 )}
+                <button className="adjust-btn" onClick={onIdle}>Finish — next athlete</button>
               </>
             )}
 
             {saveState === 'error' && (
               <div className="error-card" style={{ fontSize: 13 }}>
-                Save failed — check connection and try again
+                Local save failed — check device storage and try again
               </div>
             )}
 
@@ -331,7 +393,11 @@ export default function Results({ results, error, warnings, athlete, rowId, onRe
                 Enter Manually
               </button>
             )}
-            <button className="retry-btn" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }} onClick={onRetry}>
+            <button
+              className="retry-btn"
+              style={{ background: 'var(--color-surface, var(--white))', border: '1px solid var(--border-strong)', color: 'var(--text-primary)' }}
+              onClick={onRetry}
+            >
               Measure Again
             </button>
           </>

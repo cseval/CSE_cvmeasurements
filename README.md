@@ -1,352 +1,136 @@
-# CV Measurements
+# CV Measurement Station — NFC-Native
 
-A web app that measures an athlete's **height**, **wingspan**, and **hand span** from a single photo taken on a phone. An operator selects an event, picks a player from the event roster, then points the camera at the athlete in a T-pose with a printed ArUco marker on the wall behind them. The app returns measurements in centimeters, shows an annotated photo with the measurement lines overlaid, and saves the results to the database. A second screen lets the operator enter additional physical assessment data (age, weight, hip/t-spine/grip measurements) for the same player.
+Web app that measures an athlete's **height**, **wingspan**, and **hand span**
+from a single phone photo (T-pose + ArUco marker for scale), plus a
+second-screen assessment (age, weight, hip ER/IR, t-spine, grip strength).
 
----
+**Rebuilt August 2026 to be NFC-native** (see `HANDOFF-NFC-REBUILD.md`):
 
-## How It Works
+- **No roster, no names, no identity in the capture path.** The athlete
+  taps an NFC bracelet; the reader (USB HID keyboard) types the tag UID
+  and presses Enter. That UID is the only subject key the app ever sees.
+- **Local-first.** Saves land in IndexedDB immediately and sync to the
+  backend in the background with retry + backoff. A CSV export recovers
+  a whole shift if the network is down.
+- **Every save is a new trial.** Repeat visits are never overwritten.
+- **All measurements stored in centimeters** (`DECIMAL`); ft/in is a
+  display-time conversion only.
+- **Station auth.** `X-Station-Token` header checked against
+  `STATION_API_KEY` (unset = dev mode, open access).
+- **Audit.** Every tap — resolved or not, captured or not — is logged to
+  the local scan store and synced to the station tap log
+  (`station_tap_log` under Schema A, `scan_event` under Schema B).
 
-1. The operator opens the app and searches for an event by name
-2. The operator selects the event — the roster of registered players loads automatically
-3. The operator selects a player from the roster
-4. The athlete stands in a T-pose (arms fully extended, palms facing the camera) with the printed ArUco marker flat on the wall beside them
-5. The operator taps **CAP** to capture the photo
-6. The photo is sent to the Python backend which:
-   - Detects the ArUco marker to establish a pixel-per-cm scale
-   - Runs MediaPipe Pose to locate body landmarks (nose, heels, fingertips)
-   - Runs MediaPipe Hands for more accurate hand landmarks
-   - Calculates height (estimated crown to heel), wingspan (middle finger tip to middle finger tip), and hand span (thumb tip to pinky tip)
-7. Results are returned with an annotated photo showing exactly which points were used
-8. The operator saves the measurements to the database, then optionally enters additional assessment data (age, weight, hip rotation, t-spine rotation, grip strength)
-
----
-
-## Tech Stack
-
-**Frontend**
-
-- React 18 + Vite 5
-- Runs in the browser — no CV processing on the client
-- Hosted on Vercel
-
-**Backend**
-
-- Python + FastAPI
-- MediaPipe (pose and hand landmark detection)
-- OpenCV (ArUco marker detection and image processing)
-- Hosted on Azure App Service
-
-**Key Python files**
-
-| File                 | Purpose                                                        |
-| -------------------- | -------------------------------------------------------------- |
-| `server.py`          | FastAPI server — all API endpoints                             |
-| `db.py`              | Database queries (events, roster, save measurements)           |
-| `pipeline.py`        | Orchestrates the full measurement flow                         |
-| `calibrate.py`       | ArUco marker detection and px/cm scale calculation             |
-| `measure.py`         | Measurement math (height, wingspan, hand span)                 |
-| `visualize.py`       | Draws annotated overlay image returned with results            |
-| `generate_marker.py` | One-time utility to generate the printable ArUco marker        |
-
-**API endpoints**
-
-| Endpoint                          | Purpose                                      |
-| --------------------------------- | -------------------------------------------- |
-| `GET /api/events`                 | Search events by name                        |
-| `GET /api/events/{id}/roster`     | Get player roster for an event               |
-| `GET /api/athletes/{id}/status`   | Check if a player already has a DB row       |
-| `POST /api/measure`               | Run CV pipeline on a photo                   |
-| `POST /api/save`                  | Save height/wingspan/hand span to DB         |
-| `POST /api/save_additional`       | Save additional assessment data to DB        |
-
----
-
-## Setup
-
-### Requirements
-
-- Python 3.11 (mediapipe does not support 3.12+)
-- Node.js 18+
-
-### Install dependencies
-
-```bash
-# Python
-pip3 install -r requirements.txt
-
-# JavaScript
-npm install
-```
-
-### Verify dependencies are installed
-
-After installing, confirm everything is in place:
-
-```bash
-# Check Python version (should be 3.11.x)
-python3 --version
-
-# Check all Python packages are satisfied (no errors = good)
-pip3 install -r requirements.txt --dry-run
-
-# Check Node.js version (should be 18+)
-node --version
-
-# Check Vite and React are present
-npm list vite react
-```
-
-All lines in the pip output should say "Requirement already satisfied". If any package is missing it will say "Would install" — run `pip3 install -r requirements.txt` to fix it.
-
-### Create a `.env` file
-
-Create a file named `.env` in the project root with the following keys (get values from the team):
+## Architecture
 
 ```
-DB_HOST=
-DB_PORT=3306
-DB_NAME=
-DB_USER=
-DB_PASSWORD=
+React 18 + Vite 5 (Vercel)  ──HTTPS──▶  FastAPI + MediaPipe + OpenCV (Azure, Python 3.11)
+                                              │
+                                              ▼
+                         persistence/ adapter (SCHEMA_PROFILE)
+                         a → new_lab_pipeline        b → cse_db_v2_dev
 ```
 
-The app will fail to start without this file.
+The frontend does no CV work. The persistence layer is schema-agnostic:
+`persistence/base.py` defines the contract, `persistence/schema_a.py` and
+`persistence/schema_b.py` implement it against the two candidate lab
+schemas, and `persistence/__init__.py` selects via `SCHEMA_PROFILE`.
+The API contract the app speaks is identical under both.
 
-### Generate and print the ArUco marker
-
-```bash
-python3 generate_marker.py
-```
-
-This creates `marker/marker_20cm.png`. Print it at **100% / actual size** so the black square is exactly the size set in `calibrate.py` (currently `MARKER_CM = 20.0` cm). Tape it flat on the wall at wrist height beside the athlete.
-
-> **Note:** If your printed marker comes out a different size, update `MARKER_CM` in `calibrate.py` to match the actual printed size in centimeters.
-
----
-
-## Running Locally
-
-You need two terminals running simultaneously, or use the single combined command:
-
-```bash
-python3 -m uvicorn server:app --host 0.0.0.0 --reload & npm run dev -- --host
-```
-
-- **Backend** runs at `http://localhost:8000`
-- **Frontend** runs at `https://localhost:5173`
-
-The Vite dev server proxies `/api` requests to the backend automatically.
-
-### Testing on a phone (same WiFi network)
-
-The frontend runs over HTTPS (required for camera access on mobile). After starting, Vite prints a `Network:` URL like:
+## Operator flow
 
 ```
-https://192.168.x.x:5173
+Station setup (once per shift: station id, lab, event session, operator,
+marker size 12/16/20 + PDF, reader prefix, API token)
+  → Idle "TAP TO BEGIN" (hidden input focused — the reader is armed)
+      → tap → subject resolved (UID only; unenrolled tags proceed, flagged)
+  → Camera (live view or photo library; optional 5s countdown)
+  → Results (annotated photo, Adjust Lines, Enter Manually,
+             save-local-first, pending/synced status)
+  → Additional Info (same capture record, same server trial)
+  → back to Idle (next tap)
 ```
 
-Open that URL on your phone. You will see a certificate warning — this is expected for local development. Tap **Advanced → Proceed** (Chrome) or **Show Details → Visit this website** (Safari). The warning disappears when deployed to a real domain.
+Test Mode measures with no subject attached (sanity-checking a marker
+print or camera position without polluting data).
 
----
+## Tap protocol
 
-## Photo Setup
+The reader is a USB HID keyboard (`NEW Pipeline/firmware/code.py`):
+uppercase hex, no separators, then Enter; 3 s per-tag cooldown; optional
+`PREFIX`. UID length is **not fixed** (NTAG21x = 14 hex chars, Mifare
+Classic = 8) — validation is `8–20` hex chars, even length, plus the
+configured prefix. Any screen that can receive a tap keeps a focused
+input at all times (`TapCatcher` is mounted once, outside the screen
+switch, and re-focuses after every submit, blur, and tab return —
+invariant 1 from the handoff).
 
-For accurate measurements:
+## API
 
-- Athlete stands with their **back close to the wall**, arms fully extended horizontally at shoulder height
-- **Palms face the camera**, fingers together
-- The ArUco marker is taped **flat on the wall** at wrist height, fully visible in frame
-- Camera is at **chest height**, far enough back that the full body fits in frame
-- Good, even lighting — shadows on the hands reduce detection accuracy
-- Athlete and marker should be in the **same plane** (marker on the wall, not held in hand)
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/health` | liveness; shows active schema profile + auth state |
+| `GET /api/station/bootstrap` | marker sizes, UID rule, profile |
+| `POST /api/subject/resolve` | UID in → opaque subject handle + `enrolled` flag. **Never returns identity.** |
+| `POST /api/capture/save` | session + trial (`trial_type='movement_screen'`) + result row. `trial_ref` set → update that trial's result (additional-info path). |
+| `POST /api/scan/log` | one row per tap, resolved or not |
+| `POST /api/measure` | image + `marker_cm` → measurements + annotated image (unchanged CV path) |
+| `GET /api/marker/{cm}` / `/pdf` | printable marker (12/16/20 cm) |
 
----
+All endpoints except `/api/health` require `X-Station-Token` when
+`STATION_API_KEY` is set.
 
-## CLI Usage
+## Environment
 
-You can also run the pipeline directly on a photo without the web app:
+```
+# backend (.env / App Service settings)
+DB_HOST= DB_PORT=3306 DB_NAME= DB_USER= DB_PASSWORD=   # point at the chosen target DB
+SCHEMA_PROFILE=a | b          # handoff §6.0 — human decision (default: a)
+STATION_API_KEY=              # station token; unset = dev mode (open)
 
-```bash
-python3 pipeline.py path/to/photo.jpg
-
-# With annotated debug image saved alongside the input
-python3 pipeline.py path/to/photo.jpg --debug
+# frontend (Vercel)
+VITE_API_URL=                 # base URL (overridable per-station in Station Setup)
 ```
 
----
+## Stack constraints
 
-## Deployment
+- Python **3.11** (MediaPipe does not support 3.12+).
+- `opencv-contrib-python-headless` only (Azure Linux has no `libxcb`);
+  `scripts/azure_post_build.sh` strips the GUI package if Oryx pulls it in.
+- Azure App Service tier **B2 minimum** (MediaPipe/OpenCV need real CPU/RAM).
+- Frontend dev runs HTTPS via `@vitejs/plugin-basic-ssl` (mobile camera).
+- MySQL **8.0.19+** (the app uses the `AS new` upsert-alias form).
 
-The production deployment is split:
+## Migrations
 
-- **Backend:** Azure App Service for Linux, Python 3.11
-- **Frontend:** Vercel, Vite static build
+`migrations/02_station_extras.sql` — **pending confirmation** of the
+handoff's §6.1 decision. Implements option (a) (a
+`movement_screen_result` table keyed to the trial, all values `DECIMAL`
+cm) plus `station_tap_log` (Schema A). Apply after the schema choice is
+made; run the block for your profile only.
 
-### Backend - Azure App Service
+## Tests
 
-Use a Linux App Service with Python 3.11. Do not use the Free/Shared tier for this app; MediaPipe and OpenCV need real CPU and memory. Start with at least `B2`, and move to a production tier such as `P1v3` if startup or measurement processing is slow.
-
-Create or scale the App Service Plan:
-
-```bash
-az appservice plan create \
-  --resource-group rg-cvmeasurements \
-  --name asp-cvmeasurements \
-  --is-linux \
-  --sku B2
+```
+python scripts/test_validate_uid.py      # UID validation (server contract)
+node scripts/test_tap_protocol.mjs       # UID validation (client) + 10-tap invariant
 ```
 
-Create the web app if it does not already exist:
+## Repo layout
 
-```bash
-az webapp create \
-  --resource-group rg-cvmeasurements \
-  --plan asp-cvmeasurements \
-  --name cvmeasurements-api \
-  --runtime "PYTHON|3.11"
-```
-
-Set the startup command:
-
-```bash
-az webapp config set \
-  --resource-group rg-cvmeasurements \
-  --name cvmeasurements-api \
-  --startup-file "python -m uvicorn server:app --host 0.0.0.0 --port 8000"
-```
-
-Set application settings. `SCM_DO_BUILD_DURING_DEPLOYMENT=true` tells Azure/Oryx to install Python dependencies during deployment. `POST_BUILD_COMMAND` removes the GUI OpenCV package that MediaPipe can pull in and keeps only the headless OpenCV package required on Azure Linux.
-
-```bash
-az webapp config appsettings set \
-  --resource-group rg-cvmeasurements \
-  --name cvmeasurements-api \
-  --settings \
-    SCM_DO_BUILD_DURING_DEPLOYMENT=true \
-    POST_BUILD_COMMAND="bash scripts/azure_post_build.sh" \
-    DB_HOST="..." \
-    DB_PORT="3306" \
-    DB_NAME="..." \
-    DB_USER="..." \
-    DB_PASSWORD="..."
-```
-
-If App Service authentication is enabled, allow anonymous API access or turn it off:
-
-```bash
-az webapp auth update \
-  --resource-group rg-cvmeasurements \
-  --name cvmeasurements-api \
-  --enabled false
-```
-
-Restart after configuration changes:
-
-```bash
-az webapp restart \
-  --resource-group rg-cvmeasurements \
-  --name cvmeasurements-api
-```
-
-### GitHub Actions Deployment to Azure
-
-Use Azure App Service Deployment Center:
-
-1. Open the Azure App Service.
-2. Go to **Deployment Center**.
-3. Source: **GitHub**.
-4. Provider: **GitHub Actions**.
-5. Organization: `cseval`.
-6. Repository: `CVMeasurements`.
-7. Branch: `azure-deploy` or your production branch.
-8. Authentication: **User-assigned identity**. Select an existing managed identity or create a new one. The identity needs `Website Contributor` on the App Service.
-9. Save the setup.
-
-Azure should create a workflow under `.github/workflows/`. A successful run deploys the repository to the App Service, then Oryx installs `requirements.txt`.
-
-After deployment, test the backend:
-
-```text
-https://cvmeasurements-api.azurewebsites.net/api/events?q=test
-```
-
-Expected result: a JSON array. An empty array is fine if no event matches `test`.
-
-### Frontend - Vercel
-
-Connect the same GitHub repo to Vercel.
-
-Use these build settings:
-
-```text
-Framework Preset: Vite
-Build Command: npm run build
-Output Directory: dist
-Install Command: npm ci
-```
-
-The frontend currently calls relative `/api/...` paths. In production, add a Vercel rewrite so those calls are proxied to Azure:
-
-```json
-{
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [
-    {
-      "source": "/api/:path*",
-      "destination": "https://cvmeasurements-api.azurewebsites.net/api/:path*"
-    }
-  ]
-}
-```
-
-Alternatively, refactor the frontend fetch calls to use a `VITE_API_BASE_URL` environment variable and set that value in Vercel.
-
-### Deployment Troubleshooting
-
-**GitHub deploy fails with `Site Disabled (CODE: 403)`**
-
-Check the App Service state:
-
-```bash
-az webapp show \
-  --resource-group rg-cvmeasurements \
-  --name cvmeasurements-api \
-  --query "{state:state, enabled:enabled, publicNetworkAccess:publicNetworkAccess}" \
-  -o table
-```
-
-If `state` is `QuotaExceeded`, scale the App Service Plan up from Free/Shared to at least `B2`:
-
-```bash
-az appservice plan update \
-  --resource-group rg-cvmeasurements \
-  --name asp-cvmeasurements \
-  --sku B2
-```
-
-**Startup fails with `ImportError: libxcb.so... cannot open shared object file`**
-
-Azure has installed a GUI OpenCV wheel. Confirm:
-
-- `requirements.txt` uses `opencv-contrib-python-headless`
-- `POST_BUILD_COMMAND` is set to `bash scripts/azure_post_build.sh`
-- the latest commit was deployed
-
-Then redeploy and check the startup logs for:
-
-```text
-OpenCV 4.10.0 loaded from ...
-```
-
-**Backend returns 403**
-
-Check:
-
-- You are using `https://cvmeasurements-api.azurewebsites.net/api/...`, not the `.scm.azurewebsites.net` URL
-- App Service authentication is off or allows unauthenticated requests
-- Public network access is enabled
-- Access restrictions are not blocking your IP
-
-**Backend returns 500**
-
-Open App Service **Log stream** and retry the request. Common causes are missing DB application settings, MySQL network/firewall rules, or invalid DB credentials.
+| File | Role |
+|---|---|
+| `server.py` | FastAPI app, endpoints, station auth |
+| `persistence/` | schema-agnostic contract + Schema A/B adapters |
+| `pipeline.py` `calibrate.py` `measure.py` `visualize.py` `generate_marker.py` | CV core (carried over unchanged) |
+| `src/App.jsx` | screen state machine + tap wiring |
+| `src/components/TapCatcher.jsx` | persistent focused input (invariant 1) |
+| `src/components/StationSetup.jsx` | once-per-shift station config |
+| `src/components/IdleScreen.jsx` | "TAP TO BEGIN" + status + audit trail |
+| `src/components/Results.jsx` | CV results, adjust, manual entry, local-first save |
+| `src/components/AdditionalInfo.jsx` | assessment fields, same record/trial |
+| `src/components/Camera.jsx` `AdjustCanvas.jsx` | carried over unchanged |
+| `src/lib/storage.js` | localStorage config + IndexedDB stores |
+| `src/lib/sync.js` | background sync queue (retry/backoff) + API client |
+| `src/lib/tapProtocol.js` | UID validation (shared) |
+| `src/lib/csv.js` | CSV recovery export |

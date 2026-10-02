@@ -1,7 +1,22 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import BrandBar from './BrandBar.jsx';
 
-export default function Camera({ onCapture, onBack, disabled }) {
+/**
+ * Capture screen. Unchanged from the previous build apart from the status
+ * strip below.
+ *
+ * The marker size is shown persistently and prominently because it is the one
+ * setting that silently ruins a whole shift: the pipeline derives px_per_cm by
+ * assuming the detected marker is the size that was selected, so a 12cm
+ * printout measured as 20cm scales every value by 1.67 with no error raised
+ * anywhere. Making the selection impossible to forget is the only defence
+ * available without a second reference object in frame.
+ *
+ * The subject token is shown for the same reason a name used to be: so the
+ * operator can see that the photo they are about to take will be attached to
+ * the athlete who just tapped. It is opaque, so showing it costs nothing.
+ */
+export default function Camera({ onCapture, onBack, disabled, markerCm, subjectToken, testMode }) {
   const videoRef    = useRef(null);
   const fileRef     = useRef(null);
   const [mode, setMode]           = useState('camera');
@@ -84,6 +99,13 @@ export default function Camera({ onCapture, onBack, disabled }) {
   return (
     <div className="camera-screen">
       <BrandBar />
+
+      <div className="capture-status-strip">
+        <span className="tap-marker-badge">{markerCm} cm marker</span>
+        {testMode
+          ? <span className="hint-chip">Test mode — nothing will be saved</span>
+          : subjectToken && <span className="subject-token small">{subjectToken}</span>}
+      </div>
 
       <div className="camera-mode-toggle">
         <button

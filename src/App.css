@@ -1199,3 +1199,399 @@ h1, h2, h3 {
   line-height: 1.5;
 }
 
+
+/* ==========================================================================
+   NFC-NATIVE STATION — added for the tap-driven rebuild
+   ==========================================================================
+   Layout target is an iPad in portrait with a USB-C reader attached, which is
+   the station hardware decision. Everything here is sized for a operator
+   standing a step back from the screen, reading it at arm's length while
+   holding a camera — so type is larger and touch targets are bigger than the
+   phone-first styles above.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   The tap catcher.
+
+   Visually absent but NOT display:none and NOT disabled. A display:none or
+   disabled input cannot hold focus, and an input that cannot hold focus is
+   exactly the #1 integration bug across the whole NFC effort: the next tap
+   goes nowhere and presents to staff as a hardware failure.
+
+   opacity 0 + 1px + fixed keeps it focusable, invisible, and out of the
+   layout, and pointer-events:none stops it swallowing a touch meant for a
+   button underneath.
+   -------------------------------------------------------------------------- */
+.tap-catcher {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* -------------------------------------------------------------- idle screen */
+.tap-screen {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: 0 0 max(24px, env(safe-area-inset-bottom));
+}
+.tap-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+}
+.tap-headline {
+  font-family: var(--font-display);
+  font-size: clamp(30px, 5.5vw, 54px);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  margin: 0;
+}
+.tap-sub {
+  font-size: clamp(15px, 2vw, 19px);
+  color: var(--text-secondary);
+  margin: 0;
+  max-width: 34ch;
+}
+.tap-sub-dim {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin: 0;
+  max-width: 40ch;
+}
+.tap-token {
+  font-family: var(--font-mono);
+  font-size: clamp(20px, 3.2vw, 30px);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--navy-700);
+  margin: 0;
+}
+.tap-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+/* The chip styles above are tuned for the dark camera overlay; on this light
+   surface they need their own contrast. */
+.tap-flags .hint-chip,
+.subject-banner .hint-chip {
+  font-size: 12px;
+  padding: 6px 12px;
+  background: var(--info-bg);
+  color: var(--info-text);
+  border: 1px solid var(--info);
+}
+.tap-flags .hint-chip.ok,
+.subject-banner .hint-chip.ok {
+  background: var(--success-bg);
+  color: var(--success-text);
+  border-color: var(--success);
+}
+.tap-flags .hint-chip.missing,
+.subject-banner .hint-chip.missing {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  border-color: var(--warning);
+}
+.tap-continue {
+  margin-top: 12px;
+  min-width: 260px;
+}
+
+/* Waiting indicator. A slow pulse rather than a spinner: a spinner reads as
+   "working on it", and the station is not working on anything — it is ready. */
+.tap-pulse {
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  background: var(--red-dim);
+  border: 3px solid var(--red);
+  animation: tap-pulse 2.4s ease-in-out infinite;
+}
+@keyframes tap-pulse {
+  0%, 100% { transform: scale(1);    opacity: 0.55; }
+  50%      { transform: scale(1.14); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tap-pulse { animation: none; opacity: 1; }
+}
+.tap-check, .tap-x {
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 44px;
+  font-weight: 700;
+  line-height: 1;
+}
+.tap-check { background: var(--success-bg); color: var(--success); border: 3px solid var(--success); }
+.tap-x     { background: var(--danger-bg);  color: var(--danger);  border: 3px solid var(--danger); }
+
+.tap-footer {
+  padding: 0 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+.tap-station-info {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.tap-marker-badge {
+  background: var(--navy-800);
+  color: var(--white);
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.tap-station {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+.tap-footer-actions {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+.tap-footer-actions .adjust-btn { flex: 1; }
+
+.linkbtn {
+  background: none;
+  border: none;
+  color: var(--red);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 8px 0;
+}
+
+/* ------------------------------------------------ mid-flow tap interruption
+   A tap arriving while an athlete is mid-measurement is held, never acted on
+   silently. Invariant 5: a trial must never be attributed to the previous
+   athlete, and a silent subject switch is exactly how that happens. */
+.tap-interrupt {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  background: var(--navy-900);
+  color: var(--white);
+  padding: 18px 20px max(18px, env(safe-area-inset-bottom));
+  box-shadow: 0 -6px 24px rgba(0, 30, 55, 0.35);
+}
+.tap-interrupt-text {
+  font-size: 15px;
+  line-height: 1.45;
+  margin-bottom: 12px;
+}
+.tap-interrupt-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.tap-interrupt-actions button { flex: 1; min-width: 180px; }
+
+/* --------------------------------------------------------------- setup, misc */
+.setup-screen, .audit-screen {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: 0 0 max(24px, env(safe-area-inset-bottom));
+}
+.setup-hint {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin: 8px 0 0;
+}
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 15px;
+  color: var(--text-primary);
+  padding: 6px 0;
+  cursor: pointer;
+}
+.toggle-row input { width: 22px; height: 22px; accent-color: var(--red); }
+.form-field-unit {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* A warning is not an error: the measurement still happened, but somebody
+   should look. Styling them the same trains operators to ignore both. */
+.warn-card {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  color: var(--warning-text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ------------------------------------------------------------ subject banner
+   Replaces the old athlete-name banner. Opaque token, never a name. */
+.subject-banner {
+  background: var(--clay);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.subject-banner.test {
+  background: var(--warning-bg);
+  border-color: var(--warning);
+  color: var(--warning-text);
+  font-weight: 700;
+  font-size: 14px;
+}
+.subject-token {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--navy-800);
+}
+.subject-token.small { font-size: 13px; }
+
+.capture-status-strip {
+  background: var(--navy-800);
+  padding: 8px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.capture-status-strip .subject-token { color: var(--white); }
+.capture-status-strip .tap-marker-badge {
+  background: var(--red);
+}
+
+/* ------------------------------------------------------------- sync pill
+   The visible half of write-locally-first. Without it, "saved" and "saved and
+   synced" look identical, and a shift can end with the iPad holding the only
+   copy of thirty measurements. */
+.sync-pill {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.sync-pill.ok   { background: rgba(255,255,255,0.10); color: #A7E8C4; border-color: rgba(167,232,196,0.45); }
+.sync-pill.busy { background: rgba(255,184,28,0.16);  color: var(--gold); border-color: rgba(255,184,28,0.5); }
+.sync-pill.bad  { background: rgba(186,12,47,0.22);   color: #FFB4C0; border-color: rgba(255,180,192,0.55); }
+
+/* ------------------------------------------------------------------ audit */
+.audit-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 10px;
+}
+.audit-tile {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.audit-tile.warn { border-color: var(--warning); background: var(--warning-bg); }
+.audit-tile.bad  { border-color: var(--danger);  background: var(--danger-bg); }
+.audit-num {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--text-primary);
+}
+.audit-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.audit-row {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+.audit-row-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.audit-row-uid {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--navy-800);
+  word-break: break-all;
+}
+.audit-row-time { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.audit-row-why  { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
+
+/* ---------------------------------------------------------- tablet sizing
+   iPad portrait is ~810px wide. Constrain the reading column so form rows and
+   measurement cards do not stretch to 800px, and give the tap screen room. */
+@media (min-width: 700px) {
+  .results-body,
+  .instructions-body,
+  .results-footer,
+  .instructions-footer,
+  .tap-footer {
+    max-width: 640px;
+    margin-left: auto;
+    margin-right: auto;
+    width: 100%;
+  }
+  .form-grid { grid-template-columns: repeat(2, 1fr); }
+  .retry-btn, .adjust-btn { min-height: 56px; font-size: 17px; }
+  .form-input { min-height: 52px; font-size: 17px; }
+  .measurement-card { padding: 20px; }
+}

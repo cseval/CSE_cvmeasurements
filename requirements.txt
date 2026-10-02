@@ -7,3 +7,12 @@ uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
 mysql-connector-python>=8.0.0
 python-dotenv>=1.0.0
+
+# Optional — only needed when ARTIFACT_AZURE_CONTAINER is set, so that capture
+# photos go to Blob storage instead of App Service local disk (which does not
+# survive a redeploy or a scale-out). artifacts.py imports these lazily.
+# azure-storage-blob>=12.19.0
+# azure-identity>=1.15.0
+
+# Test-only. Not needed at runtime on the App Service.
+# playwright>=1.44.0

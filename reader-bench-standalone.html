@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Reader Check">
+  <meta name="description" content="Bench check for the CSE lab NFC bracelet reader.">
+  <style>
+    :root { color-scheme: light dark; }
+    html, body { margin: 0; }
+    body { font: 14px/1.5 system-ui, -apple-system, sans-serif; }
+    img { max-width: 100%; }
+    [hidden] { display: none !important; }
+  </style>
+  <title>Reader Bench Check</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+    /* ---------------------------------------------------------------
+       Palette follows the reader's own status LEDs, which is what staff
+       already read at the station: dim blue armed, green accepted, amber
+       same-tag cooldown, red failed read.
+       --------------------------------------------------------------- */
+    :root {
+      --ground:      #F2F5F8;
+      --panel:       #FFFFFF;
+      --panel-sunk:  #E9EEF3;
+      --rule:        #D2DCE5;
+      --rule-soft:   #E4EAF0;
+      --ink:         #10212E;
+      --ink-soft:    #4A6172;
+      --ink-faint:   #7C919F;
+
+      --armed:       #2E6D9C;
+      --armed-bg:    #E2EDF6;
+      --good:        #14794C;
+      --good-bg:     #DCF3E7;
+      --cool:        #8A6408;
+      --cool-bg:     #FBF0D4;
+      --bad:         #A80C2A;
+      --bad-bg:      #FBE4E8;
+
+      --shadow: 0 1px 2px rgba(16,33,46,.06), 0 6px 18px rgba(16,33,46,.07);
+
+      --display: 'Montserrat', -apple-system, 'Segoe UI', system-ui, sans-serif;
+      --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --ground:     #0C1620;
+        --panel:      #14212D;
+        --panel-sunk: #0F1B25;
+        --rule:       #263A4A;
+        --rule-soft:  #1C2C39;
+        --ink:        #E7EEF4;
+        --ink-soft:   #A3B7C6;
+        --ink-faint:  #6D8494;
+
+        --armed:      #74B3E0;
+        --armed-bg:   #16303F;
+        --good:       #5FD9A4;
+        --good-bg:    #10322A;
+        --cool:       #F0C15A;
+        --cool-bg:    #332813;
+        --bad:        #FF9BAC;
+        --bad-bg:     #3A1520;
+
+        --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.35);
+      }
+    }
+    :root[data-theme="dark"] {
+      --ground:     #0C1620;
+      --panel:      #14212D;
+      --panel-sunk: #0F1B25;
+      --rule:       #263A4A;
+      --rule-soft:  #1C2C39;
+      --ink:        #E7EEF4;
+      --ink-soft:   #A3B7C6;
+      --ink-faint:  #6D8494;
+      --armed:      #74B3E0;
+      --armed-bg:   #16303F;
+      --good:       #5FD9A4;
+      --good-bg:    #10322A;
+      --cool:       #F0C15A;
+      --cool-bg:    #332813;
+      --bad:        #FF9BAC;
+      --bad-bg:     #3A1520;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.35);
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    body {
+      background: var(--ground);
+      color: var(--ink);
+      font-family: var(--display);
+      font-weight: 500;
+      line-height: 1.5;
+    }
+
+    .wrap {
+      max-width: 860px;
+      margin: 0 auto;
+      padding-block: 28px 56px;
+      padding-left: 20px;
+      padding-right: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* ------------------------------------------------------ masthead */
+    .masthead { display: flex; flex-direction: column; gap: 6px; }
+    .eyebrow {
+      font-size: 11px; font-weight: 700; letter-spacing: .16em;
+      text-transform: uppercase; color: var(--ink-faint);
+    }
+    h1 {
+      margin: 0; font-size: clamp(26px, 4.4vw, 36px); font-weight: 800;
+      letter-spacing: -.02em; text-wrap: balance;
+    }
+    .standfirst {
+      margin: 0; max-width: 62ch; color: var(--ink-soft); font-size: 15px;
+    }
+
+    /* ------------------------------------------------- status readout */
+    .readout {
+      background: var(--panel);
+      border: 1px solid var(--rule);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 28px 24px;
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
+      text-align: center;
+      border-top: 4px solid var(--armed);
+    }
+    .readout[data-state="good"] { border-top-color: var(--good); }
+    .readout[data-state="cool"] { border-top-color: var(--cool); }
+    .readout[data-state="bad"]  { border-top-color: var(--bad); }
+
+    .lamp {
+      width: 54px; height: 54px; border-radius: 50%;
+      background: var(--armed-bg); border: 3px solid var(--armed);
+      display: grid; place-items: center;
+      font-size: 24px; font-weight: 800; color: var(--armed);
+      animation: breathe 2.6s ease-in-out infinite;
+    }
+    .readout[data-state="good"] .lamp { background: var(--good-bg); border-color: var(--good); color: var(--good); animation: none; }
+    .readout[data-state="cool"] .lamp { background: var(--cool-bg); border-color: var(--cool); color: var(--cool); animation: none; }
+    .readout[data-state="bad"]  .lamp { background: var(--bad-bg);  border-color: var(--bad);  color: var(--bad);  animation: none; }
+    @keyframes breathe { 0%,100% { opacity: .5 } 50% { opacity: 1 } }
+    @media (prefers-reduced-motion: reduce) { .lamp { animation: none; opacity: 1 } }
+
+    .headline { font-size: clamp(20px, 3.4vw, 28px); font-weight: 800; letter-spacing: -.01em; }
+    .uid {
+      font-family: var(--mono); font-size: clamp(17px, 3.2vw, 24px); font-weight: 600;
+      letter-spacing: .09em; color: var(--armed); word-break: break-all;
+    }
+    .readout[data-state="good"] .uid { color: var(--good); }
+    .readout[data-state="bad"]  .uid { color: var(--bad); }
+    .detail { color: var(--ink-soft); font-size: 14px; max-width: 46ch; }
+
+    /* ---------------------------------------------------- tap counter */
+    .counter {
+      background: var(--panel); border: 1px solid var(--rule);
+      border-radius: 14px; box-shadow: var(--shadow); padding: 20px 22px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .counter-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+    .counter-title { font-weight: 700; font-size: 15px; }
+    .counter-note { font-size: 13px; color: var(--ink-faint); }
+    .pips { display: flex; gap: 7px; flex-wrap: wrap; }
+    .pip {
+      width: 100%; max-width: 46px; height: 34px; flex: 1 1 28px;
+      border-radius: 7px; background: var(--panel-sunk);
+      border: 1px solid var(--rule-soft);
+      display: grid; place-items: center;
+      font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--ink-faint);
+    }
+    .pip.lit { background: var(--good-bg); border-color: var(--good); color: var(--good); }
+    .verdict { font-size: 14px; font-weight: 600; }
+    .verdict.pass { color: var(--good); }
+    .verdict.warn { color: var(--cool); }
+
+    /* ------------------------------------------------------- log table */
+    .log { background: var(--panel); border: 1px solid var(--rule); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+    .log-head {
+      padding: 16px 20px; border-bottom: 1px solid var(--rule-soft);
+      display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+    }
+    .log-title { font-weight: 700; font-size: 15px; }
+    .log-scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th {
+      text-align: left; padding: 9px 12px; font-size: 10px; font-weight: 700;
+      letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint);
+      background: var(--panel-sunk); white-space: nowrap;
+      border-bottom: 1px solid var(--rule-soft);
+    }
+    td { padding: 9px 12px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+    tr:last-child td { border-bottom: 0; }
+    td.m { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    td.raw { font-family: var(--mono); word-break: break-all; min-width: 130px; }
+    .tag {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 700; white-space: nowrap;
+    }
+    .tag.ok   { background: var(--good-bg); color: var(--good); }
+    .tag.no   { background: var(--bad-bg);  color: var(--bad); }
+    .tag.rep  { background: var(--cool-bg); color: var(--cool); }
+    .why { color: var(--ink-soft); font-size: 12px; display: block; margin-top: 2px; }
+    .empty { padding: 28px 20px; text-align: center; color: var(--ink-faint); font-size: 14px; }
+
+    /* --------------------------------------------------------- buttons */
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
+    button {
+      font-family: var(--display); font-size: 14px; font-weight: 700;
+      padding: 10px 16px; border-radius: 9px; cursor: pointer;
+      background: var(--panel-sunk); color: var(--ink);
+      border: 1px solid var(--rule);
+    }
+    button:hover { border-color: var(--ink-faint); }
+    button:focus-visible { outline: 3px solid var(--armed); outline-offset: 2px; }
+
+    /* ------------------------------------------------------ checklist */
+    .card {
+      background: var(--panel); border: 1px solid var(--rule);
+      border-radius: 14px; box-shadow: var(--shadow); padding: 20px 22px;
+    }
+    .card h2 { margin: 0 0 4px; font-size: 15px; font-weight: 700; }
+    .card p { margin: 0; color: var(--ink-soft); font-size: 14px; max-width: 62ch; }
+    ol.steps { margin: 12px 0 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 12px; }
+    ol.steps li { display: grid; grid-template-columns: 26px 1fr; gap: 12px; align-items: start; }
+    .num {
+      width: 26px; height: 26px; border-radius: 7px; background: var(--armed-bg);
+      color: var(--armed); display: grid; place-items: center;
+      font-family: var(--mono); font-size: 12px; font-weight: 600;
+    }
+    .steps strong { display: block; font-weight: 700; font-size: 14px; }
+    .steps span { color: var(--ink-soft); font-size: 14px; }
+
+    .meta { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--ink-soft); }
+    .meta b { color: var(--ink); font-family: var(--mono); font-weight: 600; }
+
+    .catcher { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; pointer-events: none; z-index: -1; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <span class="eyebrow">CSE Lab · Station Hardware</span>
+    <h1>Reader Bench Check</h1>
+    <p class="standfirst">
+      Confirms the NFC bracelet reader talks to a browser correctly, before any
+      of it is wired to a database. Plug the reader in, tap bracelets, read the
+      panel. Nothing here is saved anywhere but this device.
+    </p>
+  </header>
+
+  <input class="catcher" id="catcher" autocomplete="off" autocorrect="off"
+         autocapitalize="off" spellcheck="false" inputmode="none"
+         aria-hidden="true" tabindex="-1">
+
+
+  <section class="readout" id="readout" data-state="armed">
+    <div class="lamp" id="lamp" aria-hidden="true">●</div>
+    <div class="headline" id="headline">Armed — tap a bracelet</div>
+    <div class="uid" id="uidline"></div>
+    <div class="detail" id="detail">The reader types into this page like a keyboard. You should not need to click anything first.</div>
+  </section>
+
+  <section class="counter">
+    <div class="counter-head">
+      <span class="counter-title">Ten taps, no screen touches</span>
+      <span class="counter-note">Touching the screen resets this on purpose</span>
+    </div>
+    <div class="pips" id="pips"></div>
+    <div class="verdict" id="verdict">Tap ten bracelets in a row without touching the screen.</div>
+  </section>
+
+  <section class="log">
+    <div class="log-head">
+      <span class="log-title">Every tap, in order</span>
+      <div class="row">
+        <button id="copy" type="button">Copy log</button>
+        <button id="clear" type="button">Clear</button>
+      </div>
+    </div>
+    <div class="meta" style="padding: 0 20px 14px;">
+      <span>Taps <b id="nTaps">0</b></span>
+      <span>Accepted <b id="nOk">0</b></span>
+      <span>Rejected <b id="nBad">0</b></span>
+      <span>Distinct bracelets <b id="nUniq">0</b></span>
+      <span>Focus losses <b id="nFocus">0</b></span>
+    </div>
+    <div class="log-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th><th>What the reader typed</th><th>Chars</th>
+            <th>Gap</th><th>Result</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="empty">No taps yet.</div>
+  </section>
+
+  <section class="card">
+    <h2>What to do</h2>
+    <p>Run this on whatever machine the reader is plugged into. A laptop is fine — you are testing the reader, not the iPad.</p>
+    <ol class="steps">
+      <li><span class="num">1</span><span><strong>Plug the reader in and wait for the light.</strong> Dim blue means armed and waiting.</span></li>
+      <li><span class="num">2</span><span><strong>Tap one bracelet.</strong> The reader beeps once, long. This panel should turn green within a second, with no clicking.</span></li>
+      <li><span class="num">3</span><span><strong>Tap ten different bracelets in a row.</strong> Do not touch the screen between taps. All ten pips must light.</span></li>
+      <li><span class="num">4</span><span><strong>Tap the same bracelet twice quickly.</strong> The second one should do nothing and the reader should give two short beeps. That is the 3 second cooldown working.</span></li>
+      <li><span class="num">5</span><span><strong>Wait four seconds, tap it again.</strong> Now it should register as a repeat, which is a legitimate second measurement.</span></li>
+      <li><span class="num">6</span><span><strong>Copy the log and send it over.</strong> The character counts tell us which chip family your bracelets actually are.</span></li>
+    </ol>
+  </section>
+
+  <section class="card">
+    <h2>What counts as a problem</h2>
+    <p>
+      <strong>Nothing happens at all</strong> — the reader is not being seen as a keyboard, or it is not powered. Try it in a plain text editor: if nothing types there either, it is the hardware, not this page.
+      <br><br>
+      <strong>An on-screen keyboard pops up</strong> — on an iPad that means the reader is not connected. With a real keyboard attached, iOS hides the software one.
+      <br><br>
+      <strong>Some taps in the ten miss</strong> — this is the failure worth catching. It usually looks like a flaky reader and is usually the page losing focus. The log's focus-loss counter tells the two apart.
+      <br><br>
+      <strong>Odd character counts</strong> — a truncated read. The bracelet left the field too early. Hold it flat until the beep.
+    </p>
+  </section>
+
+  <!-- Shown only when this is opened as a file on a device, rather than from
+       the hosted link. Adding it to the home screen gives a full-screen page
+       with no browser chrome, which is closer to how the real station looks. -->
+  <div class="card offline-tip" id="offlineTip" hidden>
+    <h2>Running from a file</h2>
+    <p>
+      On an iPad or iPhone, tap the share button and choose <strong>Add to
+      Home Screen</strong>. It opens full screen after that, with no browser
+      bars, which is closer to how the station will actually look. The page
+      needs no internet connection to work.
+    </p>
+  </div>
+</div>
+
+<script>
+(function () {
+  // Same rule as the station app and the server: uppercase hex, even length,
+  // 8 to 20 characters. Length is not fixed — a 7-byte NTAG21x UID is 14
+  // characters, a 4-byte Mifare-family one is 8, and both are in circulation
+  // at the lab.
+  var UID_RE = /^[0-9A-F]{8,20}$/;
+  var COOLDOWN_MS = 3000;          // matches COOLDOWN in the reader firmware
+  var KEY = 'reader-bench.v1';
+
+  var el = function (id) { return document.getElementById(id); };
+  var catcher = el('catcher'), readout = el('readout');
+  var buffer = '', taps = [], consecutive = 0, focusLosses = 0, lastTouchReset = false;
+
+  try { taps = JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { taps = []; }
+
+  function persist() {
+    try { localStorage.setItem(KEY, JSON.stringify(taps.slice(-200))); } catch (e) {}
+  }
+
+  // ---- focus discipline. The polling re-focus is the load-bearing part:
+  // everything else just makes recovery instant instead of within 400ms.
+  function holdFocus() {
+    var active = document.activeElement;
+    if (active && active !== catcher && active !== document.body) {
+      var t = active.tagName;
+      if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || active.isContentEditable) return;
+    }
+    if (active !== catcher) {
+      focusLosses++;
+      try { catcher.focus({ preventScroll: true }); } catch (e) { catcher.focus(); }
+      render();
+    }
+  }
+  setInterval(holdFocus, 400);
+  ['click', 'touchend', 'focus', 'visibilitychange'].forEach(function (e) {
+    document.addEventListener(e, holdFocus, true);
+  });
+  window.addEventListener('focus', holdFocus);
+  holdFocus();
+  focusLosses = 0;   // the initial focus is not a loss
+
+  // A real screen touch resets the ten-tap run, because the whole point of
+  // that test is that ten taps land without one.
+  document.addEventListener('pointerdown', function (ev) {
+    if (ev.isPrimary === false) return;
+    if (consecutive > 0) { consecutive = 0; lastTouchReset = true; render(); }
+  }, true);
+
+  function validate(raw) {
+    var uid = (raw || '').trim().toUpperCase().replace(/^[\t\r\n]+|[\t\r\n]+$/g, '');
+    if (!uid) return { ok: false, uid: uid, why: 'Empty — the reader sent nothing' };
+    if (uid.length % 2 !== 0) return { ok: false, uid: uid, why: 'Odd number of characters, so the read was cut short. Hold the bracelet flat until the beep.' };
+    if (!UID_RE.test(uid)) {
+      if (uid.length < 8) return { ok: false, uid: uid, why: 'Too short — partial read' };
+      if (uid.length > 20) return { ok: false, uid: uid, why: 'Too long — this looks like typing, not a tap' };
+      return { ok: false, uid: uid, why: 'Contains something that is not a hex character (0-9 or A-F)' };
+    }
+    return { ok: true, uid: uid, why: '' };
+  }
+
+  function chipFamily(len) {
+    if (len === 14) return 'NTAG21x (7-byte)';
+    if (len === 8) return 'Mifare family (4-byte)';
+    return len / 2 + '-byte';
+  }
+
+  function handle(raw) {
+    var now = Date.now();
+    var prev = taps.length ? taps[taps.length - 1] : null;
+    var v = validate(raw);
+    var gap = prev ? now - prev.at : null;
+
+    var repeat = false, tooSoon = false;
+    if (v.ok) {
+      for (var i = taps.length - 1; i >= 0; i--) {
+        if (taps[i].uid === v.uid) {
+          repeat = true;
+          tooSoon = (now - taps[i].at) < COOLDOWN_MS;
+          break;
+        }
+      }
+    }
+
+    taps.push({
+      at: now, raw: raw, uid: v.uid, ok: v.ok, why: v.why,
+      gap: gap, repeat: repeat, tooSoon: tooSoon
+    });
+    persist();
+
+    if (v.ok) { consecutive++; lastTouchReset = false; }
+    else { consecutive = 0; }
+
+    setReadout(v, repeat, tooSoon);
+    render();
+  }
+
+  function setReadout(v, repeat, tooSoon) {
+    var state = v.ok ? (repeat ? 'cool' : 'good') : 'bad';
+    readout.dataset.state = state;
+    el('lamp').textContent = v.ok ? '✓' : '×';
+    el('uidline').textContent = v.uid || '(nothing)';
+
+    if (!v.ok) {
+      el('headline').textContent = 'Not a valid tag read';
+      el('detail').textContent = v.why;
+    } else if (tooSoon) {
+      el('headline').textContent = 'Same bracelet, still cooling down';
+      el('detail').textContent = 'The reader normally blocks this for 3 seconds. Seeing it here means a repeat got through, which is worth noting.';
+    } else if (repeat) {
+      el('headline').textContent = 'Bracelet read — seen before';
+      el('detail').textContent = chipFamily(v.uid.length) + '. A repeat after the cooldown is a legitimate second measurement.';
+    } else {
+      el('headline').textContent = 'Bracelet read';
+      el('detail').textContent = chipFamily(v.uid.length) + ', ' + v.uid.length + ' characters.';
+    }
+  }
+
+  function fmtTime(ms) {
+    var d = new Date(ms);
+    return d.toTimeString().slice(0, 8);
+  }
+  function fmtGap(ms) {
+    if (ms == null) return '—';
+    if (ms < 1000) return ms + 'ms';
+    return (ms / 1000).toFixed(1) + 's';
+  }
+
+  function render() {
+    // pips
+    var pips = el('pips'); pips.innerHTML = '';
+    for (var i = 0; i < 10; i++) {
+      var p = document.createElement('div');
+      p.className = 'pip' + (i < consecutive ? ' lit' : '');
+      p.textContent = (i + 1);
+      pips.appendChild(p);
+    }
+    var verdict = el('verdict');
+    if (consecutive >= 10) {
+      verdict.className = 'verdict pass';
+      verdict.textContent = 'Ten in a row, no screen touches. This is the check that matters most — the reader and the page are talking properly.';
+    } else if (lastTouchReset) {
+      verdict.className = 'verdict warn';
+      verdict.textContent = 'Reset because the screen was touched. Start the ten again without touching it.';
+    } else {
+      verdict.className = 'verdict';
+      verdict.textContent = consecutive + ' of 10. Keep tapping without touching the screen.';
+    }
+
+    // counters
+    var ok = 0, uniq = {};
+    taps.forEach(function (t) { if (t.ok) { ok++; uniq[t.uid] = 1; } });
+    el('nTaps').textContent = taps.length;
+    el('nOk').textContent = ok;
+    el('nBad').textContent = taps.length - ok;
+    el('nUniq').textContent = Object.keys(uniq).length;
+    el('nFocus').textContent = focusLosses;
+
+    // rows, newest first
+    var body = el('rows'); body.innerHTML = '';
+    var recent = taps.slice(-60).reverse();
+    recent.forEach(function (t) {
+      var tr = document.createElement('tr');
+
+      var td1 = document.createElement('td'); td1.className = 'm';
+      td1.textContent = fmtTime(t.at); tr.appendChild(td1);
+
+      var td2 = document.createElement('td'); td2.className = 'raw';
+      td2.textContent = t.raw || '(empty)'; tr.appendChild(td2);
+
+      var td3 = document.createElement('td'); td3.className = 'm';
+      td3.textContent = (t.raw || '').length; tr.appendChild(td3);
+
+      var td4 = document.createElement('td'); td4.className = 'm';
+      td4.textContent = fmtGap(t.gap); tr.appendChild(td4);
+
+      var td5 = document.createElement('td');
+      var span = document.createElement('span');
+      if (!t.ok) { span.className = 'tag no'; span.textContent = 'rejected'; }
+      else if (t.tooSoon) { span.className = 'tag rep'; span.textContent = 'repeat, too soon'; }
+      else if (t.repeat) { span.className = 'tag rep'; span.textContent = 'repeat'; }
+      else { span.className = 'tag ok'; span.textContent = 'accepted'; }
+      td5.appendChild(span);
+      if (!t.ok && t.why) {
+        var why = document.createElement('span');
+        why.className = 'why'; why.textContent = t.why;
+        td5.appendChild(why);
+      }
+      tr.appendChild(td5);
+      body.appendChild(tr);
+    });
+    el('empty').style.display = taps.length ? 'none' : 'block';
+  }
+
+  // ---- keystroke capture. The reader types hex then presses Enter.
+  catcher.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      var raw = buffer; buffer = ''; catcher.value = '';
+      setTimeout(holdFocus, 0);
+      if (raw) handle(raw);
+      return;
+    }
+    if (e.key === 'Escape') { buffer = ''; catcher.value = ''; return; }
+    if (e.key === 'Backspace' || e.key === 'Delete') { buffer = buffer.slice(0, -1); return; }
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (buffer.length >= 64) buffer = '';
+      buffer += e.key;
+    }
+  });
+  catcher.addEventListener('blur', function () { setTimeout(holdFocus, 0); });
+
+  el('clear').addEventListener('click', function () {
+    taps = []; consecutive = 0; focusLosses = 0; lastTouchReset = false;
+    persist(); readout.dataset.state = 'armed';
+    el('lamp').textContent = '●';
+    el('headline').textContent = 'Armed — tap a bracelet';
+    el('uidline').textContent = '';
+    el('detail').textContent = 'The reader types into this page like a keyboard. You should not need to click anything first.';
+    render(); holdFocus();
+  });
+
+  el('copy').addEventListener('click', function () {
+    var lines = ['time,raw_value,characters,gap_ms,result,note'];
+    taps.forEach(function (t) {
+      var result = !t.ok ? 'rejected' : t.tooSoon ? 'repeat_too_soon' : t.repeat ? 'repeat' : 'accepted';
+      lines.push([
+        new Date(t.at).toISOString(),
+        '"' + String(t.raw).replace(/"/g, '""') + '"',
+        (t.raw || '').length,
+        t.gap == null ? '' : t.gap,
+        result,
+        '"' + String(t.why || '').replace(/"/g, '""') + '"'
+      ].join(','));
+    });
+    var text = lines.join('\n');
+    var btn = el('copy');
+    var done = function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy log'; holdFocus(); }, 1600); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done); });
+    } else { fallbackCopy(text, done); }
+  });
+
+  function fallbackCopy(text, done) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { /* nothing more to try */ }
+    ta.remove();
+  }
+
+  if (location.protocol === 'file:') {
+    var tip = el('offlineTip');
+    if (tip) tip.hidden = false;
+  }
+
+  render();
+})();
+</script>
+</body>
+</html>

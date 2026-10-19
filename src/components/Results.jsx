@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import AdjustCanvas from './AdjustCanvas.jsx'
 import BrandBar from './BrandBar.jsx'
+import VirtualKeyboard, { VKField, useVirtualKeyboard } from '../shared/VirtualKeyboard.jsx'
 
 function cmToFtIn(cm) {
   const totalInches = cm / 2.54
@@ -106,6 +107,7 @@ export default function Results({
   const [saveState, setSaveState] = useState('idle') // idle | saving | saved | error
   const [saveError, setSaveError] = useState(null)
   const canvasRef = useRef(null)
+  const kb = useVirtualKeyboard()
 
   const canAdjust = !!(results?.endpoints && results?.raw_image)
   const display = { ...results, ...adjustedVals, ...manualVals }
@@ -127,11 +129,14 @@ export default function Results({
 
   function openManualEntry() {
     setManualDraft({
-      height_cm: display.height_cm ?? '',
-      wingspan_cm: display.wingspan_cm ?? '',
-      hand_width_cm: display.hand_width_cm ?? '',
+      height_cm: display.height_cm != null ? String(display.height_cm) : '',
+      wingspan_cm: display.wingspan_cm != null ? String(display.wingspan_cm) : '',
+      hand_width_cm: display.hand_width_cm != null ? String(display.hand_width_cm) : '',
     })
     setManualEntry(true)
+    // Open the keypad on the first field: the operator reached this screen
+    // because the camera failed, and the next thing they want is to type.
+    kb.open('height_cm')
   }
 
   function handleManualApply() {
@@ -142,6 +147,7 @@ export default function Results({
     }
     setManualVals(next)
     setManualEntry(false)
+    kb.close()
     if (saveState === 'saved') setSaveState('idle')
   }
 
@@ -268,14 +274,14 @@ export default function Results({
                   <div key={key} className={`measurement-card ${cls}`}>
                     <span className="label">{label}</span>
                     <span className="value-group">
-                      <input
-                        className="measurement-input"
-                        type="number"
-                        inputMode="decimal"
-                        step="0.1"
-                        placeholder="—"
-                        value={manualDraft[key]}
-                        onChange={e => setManualDraft(p => ({ ...p, [key]: e.target.value }))}
+                      <VKField
+                        kb={kb}
+                        name={key}
+                        variant="decimal"
+                        maxLength={6}
+                        className="measurement-vkfield"
+                        value={manualDraft[key] ?? ''}
+                        onChange={v => setManualDraft(p => ({ ...p, [key]: v }))}
                       />
                       <span className="value-imperial">{liveImperial}</span>
                     </span>
@@ -304,6 +310,8 @@ export default function Results({
             )}
           </>
         )}
+
+        <VirtualKeyboard kb={kb} />
       </div>
 
       <div className="results-footer">
@@ -313,7 +321,12 @@ export default function Results({
             <button className="adjust-btn" onClick={openManualEntry}>Enter Manually</button>
           </>
         ) : manualEntry ? (
-          <button className="adjust-btn" onClick={() => setManualEntry(false)}>Cancel</button>
+          <button
+            className="adjust-btn"
+            onClick={() => { kb.close(); setManualEntry(false) }}
+          >
+            Cancel
+          </button>
         ) : (
           <>
             {!adjusting && (testMode ? (

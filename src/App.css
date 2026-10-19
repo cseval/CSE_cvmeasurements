@@ -467,6 +467,26 @@ h1, h2, h3 {
 .measurement-card.wingspan .measurement-input  { color: var(--measure-wingspan); }
 .measurement-card.hand .measurement-input      { color: var(--measure-hand); }
 
+/* Manual entry now goes through the on-screen keyboard (src/shared), because
+   the NFC reader is a USB keyboard and iOS hides the software one while it is
+   connected. Inside a measurement card the field keeps the card's inline look
+   instead of the boxed form-field look, but it keeps a border: with no OS
+   caret or focus ring, the border is the only thing saying "tap me". */
+.measurement-vkfield { width: auto; }
+
+.measurement-vkfield .vk-field {
+  min-height: 0;
+  width: 112px;
+  padding: 3px 8px;
+  justify-content: flex-end;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.measurement-card.height .measurement-vkfield .vk-field-value   { color: var(--measure-height); }
+.measurement-card.wingspan .measurement-vkfield .vk-field-value { color: var(--measure-wingspan); }
+.measurement-card.hand .measurement-vkfield .vk-field-value     { color: var(--measure-hand); }
 .manual-entry-hint {
   font-family: var(--font-body);
   font-size: 13px;

@@ -33,6 +33,10 @@ import { useCallback, useEffect, useRef } from 'react'
  * inputMode="none" asks iOS not to, but treat a keyboard popping up as a sign
  * the reader is not connected rather than as a UI bug.
  *
+ * That same suppression is why every field in this app is now filled with the
+ * on-screen keyboard in src/shared/VirtualKeyboard.jsx rather than a real
+ * <input>. See the focus guard below for the second reason.
+ *
  * @param {(raw: string) => void} onTap  called with the raw scan, verbatim.
  *        Not normalized and not validated here: scan_event records exactly
  *        what the reader typed, and cleaning it up client-side would destroy
@@ -52,13 +56,27 @@ export default function useTapReader(onTap, { enabled = true } = {}) {
   const focusInput = useCallback(() => {
     const el = inputRef.current
     if (!el) return
-    // Don't steal focus from a field the operator is actually typing in
-    // (station setup, manual measurement entry, the assessment form).
+
+    // This guard used to stand down for ANY focused INPUT/TEXTAREA/SELECT, on
+    // the reasoning that the operator might be typing. That was a data-loss
+    // bug: while such a field held focus the reader's keystrokes went into it
+    // instead of here, so a bracelet tapped mid-form produced no scan_event,
+    // no audit row, and no "another bracelet was tapped" interrupt — the tap
+    // simply vanished, and the UID landed in someone's weight field.
+    //
+    // Station setup, manual measurement entry and the assessment form now use
+    // the on-screen keyboard (src/shared/VirtualKeyboard.jsx), whose fields are
+    // divs and whose keys refuse focus. Nothing in the app needs to hold focus
+    // any more, so the catcher keeps it permanently and a tap is never lost.
+    //
+    // Two exceptions remain. A native <select> owns a modal picker while it is
+    // open, and [data-vk-keep-focus] is the escape hatch for anything added
+    // later that genuinely must receive keystrokes itself.
     const active = document.activeElement
     if (active && active !== el && active !== document.body) {
-      const tag = active.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' ||
-          active.isContentEditable) {
+      if (active.tagName === 'SELECT') return
+      if (typeof active.closest === 'function' &&
+          active.closest('[data-vk-keep-focus]')) {
         return
       }
     }
@@ -116,7 +134,14 @@ export default function useTapReader(onTap, { enabled = true } = {}) {
     // Ignore modifier combinations and navigation keys; the reader never
     // sends them, so anything here came from a human or a stray keyboard.
     if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      if (bufferRef.current.length >= MAX_BUFFER) bufferRef.current = ''
+      if (bufferRef.current.length >= MAX_BUFFER) {
+        bufferRef.current = ''
+        // The input itself has to be cleared too. handleChange below copies
+        // e.target.value over the buffer on the very same keystroke, so
+        // resetting the buffer alone restored the garbage immediately and the
+        // cap above has never actually done anything.
+        if (inputRef.current) inputRef.current.value = ''
+      }
       bufferRef.current += e.key
     }
   }, [enabled, focusInput])

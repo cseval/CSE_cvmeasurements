@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import BrandBar from './BrandBar.jsx'
 import { MARKER_SIZES } from '../lib/station.js'
 import { fetchEventSessions, fetchHealth, fetchStations, markerPdfUrl } from '../lib/api.js'
+import VirtualKeyboard, { VKField, useVirtualKeyboard } from '../shared/VirtualKeyboard.jsx'
 
 /**
  * Once-per-shift station setup. Replaces the event/roster picker entirely —
@@ -13,6 +14,10 @@ import { fetchEventSessions, fetchHealth, fetchStations, markerPdfUrl } from '..
  * operator who picks 20cm while holding a 12cm print gets values wrong by a
  * factor of 1.67 with no error anywhere, so the defence is making the choice
  * impossible to forget rather than impossible to make.
+ *
+ * Text entry goes through the on-screen keyboard. With the NFC reader plugged
+ * in — which is how the station runs — iOS hides the software keyboard, and
+ * the operator name is required, so this screen could not be completed at all.
  */
 export default function StationSetup({ config, onChange, onDone, canSkip }) {
   const [draft, setDraft] = useState(config)
@@ -20,6 +25,7 @@ export default function StationSetup({ config, onChange, onDone, canSkip }) {
   const [sessions, setSessions] = useState([])
   const [health, setHealth] = useState(null)
   const [loadError, setLoadError] = useState(null)
+  const kb = useVirtualKeyboard()
 
   useEffect(() => {
     let cancelled = false
@@ -50,6 +56,7 @@ export default function StationSetup({ config, onChange, onDone, canSkip }) {
     draft.stationCode && draft.operator?.trim()
 
   function handleStart() {
+    kb.close()
     onChange(draft)
     onDone()
   }
@@ -116,48 +123,46 @@ export default function StationSetup({ config, onChange, onDone, canSkip }) {
                 <select
                   className="form-input"
                   value={draft.stationCode}
-                  onChange={e => set('stationCode', e.target.value)}
+                  onChange={e => { set('stationCode', e.target.value); e.target.blur() }}
                 >
                   {stations.filter(s => !s.is_closed_system).map(s => (
                     <option key={s.code} value={s.code}>{s.label}</option>
                   ))}
                 </select>
               ) : (
-                <input
-                  className="form-input"
+                <VKField
+                  kb={kb}
+                  name="stationCode"
                   value={draft.stationCode}
-                  onChange={e => set('stationCode', e.target.value)}
+                  onChange={v => set('stationCode', v)}
                   placeholder="cv_app"
                 />
               )}
             </div>
-            <div className="form-field">
-              <label className="form-field-label">Device label</label>
-              <input
-                className="form-input"
-                value={draft.deviceLabel}
-                onChange={e => set('deviceLabel', e.target.value)}
-                placeholder="ipad-lab-01"
-              />
-            </div>
-            <div className="form-field">
-              <label className="form-field-label">Operator *</label>
-              <input
-                className="form-input"
-                value={draft.operator}
-                onChange={e => set('operator', e.target.value)}
-                placeholder="Staff name or initials"
-              />
-            </div>
-            <div className="form-field">
-              <label className="form-field-label">Lab location</label>
-              <input
-                className="form-input"
-                value={draft.labLocation}
-                onChange={e => set('labLocation', e.target.value)}
-                placeholder="CSE Lab"
-              />
-            </div>
+            <VKField
+              kb={kb}
+              name="deviceLabel"
+              label="Device label"
+              value={draft.deviceLabel}
+              onChange={v => set('deviceLabel', v)}
+              placeholder="ipad-lab-01"
+            />
+            <VKField
+              kb={kb}
+              name="operator"
+              label="Operator *"
+              value={draft.operator}
+              onChange={v => set('operator', v)}
+              placeholder="Staff name or initials"
+            />
+            <VKField
+              kb={kb}
+              name="labLocation"
+              label="Lab location"
+              value={draft.labLocation}
+              onChange={v => set('labLocation', v)}
+              placeholder="CSE Lab"
+            />
           </div>
         </div>
 
@@ -167,7 +172,14 @@ export default function StationSetup({ config, onChange, onDone, canSkip }) {
             <select
               className="form-input"
               value={draft.eventSessionId ?? ''}
-              onChange={e => set('eventSessionId', e.target.value ? Number(e.target.value) : null)}
+              onChange={e => {
+                set('eventSessionId', e.target.value ? Number(e.target.value) : null)
+                // iOS keeps DOM focus on a select after its picker closes, and
+                // the tap catcher stands down for a focused select. Without
+                // this blur the reader's keystrokes drive the option list
+                // instead of reaching the tap handler.
+                e.target.blur()
+              }}
             >
               <option value="">Not tied to an event</option>
               {sessions.map(s => (
@@ -203,6 +215,8 @@ export default function StationSetup({ config, onChange, onDone, canSkip }) {
             off for any session where you do not need them.
           </p>
         </div>
+
+        <VirtualKeyboard kb={kb} />
       </div>
 
       <div className="instructions-footer">

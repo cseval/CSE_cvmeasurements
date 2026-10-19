@@ -1,0 +1,275 @@
+/* ===========================================================================
+ * Styles for the vendored on-screen keyboard. See VirtualKeyboard.jsx.
+ *
+ * Every custom property is written with a fallback so this file drops into an
+ * app with a different token set (or none) without looking broken. Keep it
+ * that way — the CV station and the check-in desk ship separate stylesheets,
+ * and they do not even agree on the font token names (--font-body/--font-mono
+ * here, --font/--mono there), hence the chained var() fallbacks below.
+ * ======================================================================== */
+
+/* ------------------------------------------------------------------ field */
+
+.vk-field-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.vk-field-label {
+  font-family: var(--font-body, var(--font, system-ui, sans-serif));
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted, #708396);
+}
+
+.vk-field-unit {
+  font-weight: 500;
+  opacity: 0.8;
+}
+
+/* Deliberately mimics .form-input so swapping an <input> for this is not a
+   visual change. It is a div: it never takes focus, so the NFC reader's
+   keystrokes always reach the tap catcher. */
+.vk-field {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 14px;
+  border-radius: var(--radius, 7px);
+  border: 1px solid var(--border, #D6E0EA);
+  background: var(--white, #fff);
+  color: var(--text-primary, #12324D);
+  font-family: var(--font-body, var(--font, system-ui, sans-serif));
+  font-size: 16px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+}
+
+.vk-field-active {
+  border-color: var(--navy-600, #2E6D9C);
+  box-shadow: 0 0 0 3px rgba(46, 109, 156, 0.15);
+}
+
+.vk-field-disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.vk-field-value {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vk-field-placeholder {
+  color: var(--text-muted, #708396);
+  opacity: 0.7;
+}
+
+.vk-field-hint {
+  font-size: 12px;
+  color: var(--text-muted, #708396);
+}
+
+.vk-caret {
+  flex: none;
+  width: 2px;
+  height: 1.15em;
+  margin-left: 1px;
+  background: var(--navy-600, #2E6D9C);
+  animation: vk-blink 1.05s step-end infinite;
+}
+
+@keyframes vk-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vk-caret { animation: none; }
+}
+
+/* ------------------------------------------------------------------ panel */
+
+/* Reserves room under the content so the bottom-most field can always be
+   scrolled clear of the docked panel. */
+.vk-spacer {
+  height: 48vh;
+  flex: none;
+  pointer-events: none;
+}
+
+.vk-panel {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px));
+  background: var(--clay, #E7EDF4);
+  border-top: 1px solid var(--border-strong, #BECBD8);
+  box-shadow: 0 -6px 20px rgba(0, 30, 55, 0.14);
+  font-family: var(--font-body, var(--font, system-ui, sans-serif));
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ------------------------------------------------- active-field readout bar */
+
+.vk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 4px 6px;
+  min-width: 0;
+}
+
+.vk-bar-label {
+  flex: none;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #708396);
+}
+
+.vk-bar-value {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono, var(--mono, ui-monospace, monospace));
+  font-size: 16px;
+  color: var(--text-primary, #12324D);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vk-bar-close {
+  flex: none;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: var(--navy-600, #2E6D9C);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------- keys */
+
+.vk-key {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 46px;
+  padding: 0 4px;
+  border: 1px solid var(--border, #D6E0EA);
+  border-radius: var(--radius, 7px);
+  background: var(--white, #fff);
+  color: var(--text-primary, #12324D);
+  font-family: inherit;
+  font-size: 19px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 1px 2px rgba(0, 30, 55, 0.10);
+}
+
+.vk-key:active {
+  background: var(--cream, #F5F8FC);
+  transform: translateY(1px);
+  box-shadow: none;
+}
+
+.vk-key:disabled {
+  opacity: 0.35;
+  cursor: default;
+  box-shadow: none;
+}
+
+.vk-key-util {
+  font-size: 14px;
+  font-weight: 700;
+  background: var(--stone, #D1CCBD);
+  color: var(--text-primary, #12324D);
+}
+
+.vk-key-on {
+  background: var(--navy-600, #2E6D9C);
+  color: #fff;
+}
+
+.vk-key-go {
+  font-size: 15px;
+  font-weight: 700;
+  background: var(--red, #BA0C2F);
+  border-color: var(--red, #BA0C2F);
+  color: #fff;
+}
+
+.vk-key-space {
+  flex: 1 1 auto;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted, #708396);
+}
+
+/* ---------------------------------------------------------------- layouts */
+
+.vk-grid-num {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  max-width: 440px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.vk-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vk-row {
+  display: flex;
+  gap: 5px;
+}
+
+.vk-row > .vk-key {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* Nudges the home row inward the way a physical keyboard staggers. */
+.vk-row-inset {
+  padding: 0 5%;
+}
+
+/* --------------------------------------------------------------- tablet up */
+
+@media (min-width: 768px) {
+  .vk-panel { padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .vk-key { min-height: 54px; font-size: 21px; }
+  .vk-key-util, .vk-key-go, .vk-key-space { font-size: 16px; }
+  .vk-grid-num { max-width: 520px; }
+  .vk-spacer { height: 42vh; }
+}
+
+/* Landscape on a tablet is short: shrink keys rather than lose the content. */
+@media (max-height: 560px) {
+  .vk-key { min-height: 38px; font-size: 17px; }
+  .vk-spacer { height: 56vh; }
+}

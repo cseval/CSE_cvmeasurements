@@ -1,0 +1,9 @@
+# Shell scripts run on Linux (Azure App Service, GitHub Actions runners).
+# Windows checkouts must not give them CRLF endings: bash reads "set -euo pipefail\r"
+# as an invalid option and the script dies on line 2.
+*.sh text eol=lf
+
+# Same reasoning for anything else executed by a Linux shell.
+Procfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

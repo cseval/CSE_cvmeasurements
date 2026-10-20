@@ -59,8 +59,9 @@ TRIAL_TYPE = "movement_screen"
 # Taking capture_date from the server's UTC date did two things:
 #
 #   - evening sessions were labelled with tomorrow's date
-#   - capture_session is UNIQUE (subject, station, capture_date), so an athlete
-#     measured at 17:55 and again at 18:05 was split across two sessions
+#   - capture_session is UNIQUE on (subject, station, capture_date, sport,
+#     movement) and CV writes '' for the last two, so an athlete measured at
+#     17:55 and again at 18:05 was split across two sessions
 #
 # The second one is the real damage, because it is silent.
 LAB_TIMEZONE = os.getenv("LAB_TIMEZONE", "America/Denver")
@@ -445,9 +446,21 @@ def _scale_warning(values: dict) -> str | None:
 
 def _get_or_create_session(cur, *, subject_id, station_source_id,
                            event_session_id, lab_location, session_type,
-                           sport, operator, capture_date) -> int:
+                           sport, operator, capture_date, movement="") -> int:
     """
-    One capture_session per subject per station per day (uniquely constrained).
+    One capture_session per subject, station, day, sport AND movement.
+
+    The key gained sport and movement on 2026-10-20:
+
+        UNIQUE (anonymous_capture_subject_id, station_source_id,
+                capture_date, sport, movement)
+
+    It was the first three columns only, which suited CV — a second visit to
+    the same station on the same day should add a trial, not a session — but
+    stopped QTM recording pitching and hitting for one athlete on one day.
+
+    CV writes '' for both sport and movement, so its behaviour is unchanged:
+    every CV session for a subject on a day still collapses to one row.
 
     A second measurement on the same day is a new TRIAL in this session; a
     visit next week is a new session. INSERT IGNORE then SELECT rather than
@@ -459,22 +472,37 @@ def _get_or_create_session(cur, *, subject_id, station_source_id,
     clock: that put the 18:00 MDT UTC rollover in the middle of the unique key
     and split evening athletes across two sessions.
     """
-    today = capture_date
+    # sport and movement are NOT NULL DEFAULT '' in the schema because they are
+    # part of a unique key, and MySQL treats NULLs in a unique key as distinct
+    # from each other. One NULL slipping through here would make every session
+    # unique and silently switch off the dedupe this function exists to do —
+    # every athlete would get a fresh session per save. Normalise, never trust.
+    sport_key = (sport or "").strip().lower()
+    movement_key = (movement or "").strip().lower()
+
     cur.execute(
         """INSERT IGNORE INTO `capture_session`
              (`anonymous_capture_subject_id`, `event_session_id`, `station_source_id`,
-              `capture_date`, `lab_location`, `sport`, `session_type`, `operator`)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-        (subject_id, event_session_id, station_source_id, today,
-         lab_location, sport, session_type, operator),
+              `capture_date`, `lab_location`, `sport`, `movement`, `session_type`,
+              `operator`)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+        (subject_id, event_session_id, station_source_id, capture_date,
+         lab_location, sport_key, movement_key, session_type, operator),
     )
     if cur.lastrowid:
         return cur.lastrowid
+    # The fallback SELECT has to match the FULL key. Matching only the first
+    # three columns was correct while those were the whole key; now it would
+    # return whichever sport/movement row happened to sort first once another
+    # station writes sessions with those set.
     cur.execute(
         """SELECT `id` FROM `capture_session`
             WHERE `anonymous_capture_subject_id` = %s
-              AND `station_source_id` = %s AND `capture_date` = %s""",
-        (subject_id, station_source_id, today),
+              AND `station_source_id` = %s
+              AND `capture_date` = %s
+              AND `sport` = %s
+              AND `movement` = %s""",
+        (subject_id, station_source_id, capture_date, sport_key, movement_key),
     )
     return cur.fetchone()["id"]
 
@@ -582,20 +610,61 @@ def save_capture(*, station_code: str, client_ref: str, subject_id: int | None =
             capture_date=capture_date,
         )
 
+        # Lock the session row before reading MAX(trial_number).
+        #
+        # capture_trial now carries UNIQUE (capture_session_id, trial_number).
+        # Read-then-insert without a lock is a classic race: two saves against
+        # the same session both read MAX = 1, both pick 2, and one dies on a
+        # duplicate key instead of becoming trial 2. That is not hypothetical
+        # here — a station draining its offline queue fires saves back to back,
+        # and two stations can share a session only if they share a station
+        # code, but one station retrying while the queue drains is enough.
+        #
+        # Serialising on the parent row makes the read and the insert atomic
+        # with respect to any other writer doing the same thing.
         cur.execute(
-            """SELECT COALESCE(MAX(`trial_number`), 0) + 1 AS next
-                 FROM `capture_trial` WHERE `capture_session_id` = %s""",
+            "SELECT `id` FROM `capture_session` WHERE `id` = %s FOR UPDATE",
             (session_id,),
         )
-        trial_number = cur.fetchone()["next"]
+        # The row itself is of no interest — the lock is. It still has to be
+        # read: this connector raises "Unread result found" on the next query
+        # if a result set is left hanging.
+        cur.fetchall()
 
-        cur.execute(
-            """INSERT INTO `capture_trial`
-                 (`capture_session_id`, `trial_number`, `trial_type`,
-                  `trial_timestamp`, `validity_flag`, `client_ref`)
-               VALUES (%s, %s, %s, %s, 1, %s)""",
-            (session_id, trial_number, TRIAL_TYPE, captured_utc, client_ref),
-        )
+        def _next_trial_number():
+            cur.execute(
+                """SELECT COALESCE(MAX(`trial_number`), 0) + 1 AS next
+                     FROM `capture_trial` WHERE `capture_session_id` = %s""",
+                (session_id,),
+            )
+            return cur.fetchone()["next"]
+
+        trial_number = _next_trial_number()
+
+        # Belt and braces behind the lock. A duplicate key here would mean the
+        # lock did not hold — a different isolation level, a replica, a future
+        # path that inserts trials without taking it. Recomputing once is
+        # cheap; losing an athlete's measurement to a 1062 is not.
+        for attempt in (1, 2):
+            try:
+                cur.execute(
+                    """INSERT INTO `capture_trial`
+                         (`capture_session_id`, `trial_number`, `trial_type`,
+                          `trial_timestamp`, `validity_flag`, `client_ref`)
+                       VALUES (%s, %s, %s, %s, 1, %s)""",
+                    (session_id, trial_number, TRIAL_TYPE, captured_utc, client_ref),
+                )
+                break
+            except mysql.connector.IntegrityError as exc:
+                # 1062 is ER_DUP_ENTRY. Only retry when it is the trial-number
+                # key: a duplicate client_ref means a concurrent retry of this
+                # same save, which must surface rather than be renumbered.
+                if exc.errno != 1062 or attempt == 2 or "client_ref" in str(exc):
+                    raise
+                log.warning("trial_number %s collided on session %s; recomputing",
+                            trial_number, session_id)
+                trial_number = _next_trial_number()
+
         trial_id = cur.lastrowid
 
         values = {

@@ -237,7 +237,8 @@ CREATE TABLE `capture_session` (
   `station_source_id` INT NOT NULL COMMENT 'HYBRID: constrained FK, replacing Schema A''s free-text source_device.',
   `capture_date` DATE NOT NULL,
   `lab_location` VARCHAR(100),
-  `sport` VARCHAR(20),
+  `sport` VARCHAR(20) NOT NULL DEFAULT '' COMMENT 'Part of the unique key, so NOT NULL DEFAULT '''' rather than nullable: MySQL treats NULLs in a unique key as distinct from one another, and a single NULL would make every session unique and switch the dedupe off. CV writes ''''.',
+  `movement` VARCHAR(20) NOT NULL DEFAULT '' COMMENT 'pitching / hitting / etc. Added 2026-10-20 so QTM can record more than one movement for an athlete on one day. CV writes ''''. Same NOT NULL DEFAULT '''' reasoning as sport.',
   `session_type` VARCHAR(30),
   `operator` VARCHAR(100) COMMENT 'Staff identifier for the operator running the station. Staff, not athlete — this is not subject PII.',
   `source_import_batch_id` INT NULL,
@@ -246,11 +247,19 @@ CREATE TABLE `capture_session` (
   FOREIGN KEY (`event_session_id`) REFERENCES `event_session` (`id`),
   FOREIGN KEY (`station_source_id`) REFERENCES `station_source` (`id`),
   FOREIGN KEY (`source_import_batch_id`) REFERENCES `source_import_batch` (`id`),
-  -- One session per subject per station per day. This is what lets a second
-  -- visit to the same station on the same day add a TRIAL rather than a
-  -- session, while a visit next week is correctly a new session.
-  UNIQUE KEY `uq_session_subject_station_date`
-    (`anonymous_capture_subject_id`, `station_source_id`, `capture_date`),
+  -- One session per subject per station per day PER SPORT AND MOVEMENT.
+  --
+  -- This is what lets a second visit to the same station on the same day add a
+  -- TRIAL rather than a session, while a visit next week is correctly a new
+  -- session. CV writes '' for sport and movement, so for CV it behaves exactly
+  -- as the original three-column key did.
+  --
+  -- sport and movement joined the key on 2026-10-20. The three-column version
+  -- suited CV but stopped QTM recording pitching and hitting for one athlete
+  -- on one day, which is a normal session there.
+  UNIQUE KEY `uq_session_subject_station_date_sport_movement`
+    (`anonymous_capture_subject_id`, `station_source_id`, `capture_date`,
+     `sport`, `movement`),
   INDEX `ix_session_date_station` (`capture_date`, `station_source_id`)
 ) COMMENT = 'Generalized parent for a lab visit / station visit. No identity column.';
 
@@ -266,7 +275,8 @@ CREATE TABLE `capture_trial` (
   `notes` VARCHAR(255),
   `client_ref` VARCHAR(64) NULL UNIQUE COMMENT 'Idempotency key minted on the station device before the first send attempt. The station writes locally first and retries in the background, so the same trial WILL be submitted more than once whenever wifi drops mid-request — the UNIQUE constraint here is what makes that retry safe instead of duplicating the athlete''s measurement.',
   FOREIGN KEY (`capture_session_id`) REFERENCES `capture_session` (`id`) ON DELETE RESTRICT,
-  UNIQUE KEY `uq_trial_number_in_session` (`capture_session_id`, `trial_number`),
+  -- Named to match the live database, where it was applied on 2026-10-20.
+  UNIQUE KEY `uq_trial_session_number` (`capture_session_id`, `trial_number`),
   INDEX `ix_trial_type_time` (`trial_type`, `trial_timestamp`)
 );
 

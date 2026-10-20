@@ -6,8 +6,9 @@ in summer and UTC-7 in winter, so the UTC date rolls over at 18:00 or 17:00
 local — in the middle of an evening session. Before this was fixed:
 
   - capture_date labelled evening sessions with tomorrow's date
-  - capture_session is UNIQUE (subject, station, capture_date), so an athlete
-    measured at 17:55 and again at 18:05 was silently split into two sessions
+  - capture_session is UNIQUE on (subject, station, capture_date, sport,
+    movement) and CV writes '' for the last two, so an athlete measured at
+    17:55 and again at 18:05 was silently split into two sessions
   - the station audit defaulted to the UTC date AND filtered on
     DATE(scanned_at), so after 18:00 it reported zero taps — at exactly the
     hour staff use it to catch unprovisioned bands before athletes leave

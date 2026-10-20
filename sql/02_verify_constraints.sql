@@ -34,7 +34,7 @@ USE `new_lab_pipeline`;
 -- which assigns ids with AUTO_INCREMENT.
 DELETE FROM `lab_movement_screen` WHERE `capture_trial_id` IN (9001, 9002, 9003, 9004);
 DELETE FROM `capture_trial`       WHERE `id` IN (9001, 9002, 9003, 9004);
-DELETE FROM `capture_session`     WHERE `id` IN (9001, 9002, 9003);
+DELETE FROM `capture_session`     WHERE `id` IN (9001, 9002, 9003, 9004, 9005);
 UPDATE `subject_tag_binding` SET `previous_binding_id`    = NULL WHERE `id` IN (9001, 9002, 9003, 9004);
 UPDATE `nfc_tag_assignment`  SET `previous_assignment_id` = NULL WHERE `id` IN (9001, 9002, 9003, 9004);
 DELETE FROM `subject_tag_binding` WHERE `id` IN (9001, 9002, 9003, 9004);
@@ -117,7 +117,7 @@ SELECT IF(ROW_COUNT() = 1, 'PASS', 'FAIL')                        AS result,
        'replacement bracelet rebinds to the same subject'         AS check_name;
 
 -- ============================================================
--- 5. capture_session: one per subject per station per day
+-- 5. capture_session: one per subject / station / day / sport / movement
 -- ============================================================
 INSERT INTO `capture_session`
   (`id`, `anonymous_capture_subject_id`, `station_source_id`, `capture_date`)
@@ -135,6 +135,26 @@ INSERT IGNORE INTO `capture_session`
   SELECT 9003, 9001, `id`, '2026-09-17' FROM `station_source` WHERE `code` = 'cv_app';
 SELECT IF(ROW_COUNT() = 1, 'PASS', 'FAIL')                     AS result,
        'a later visit creates a new session'                    AS check_name;
+
+-- Same subject, same station, same day, DIFFERENT movement IS a new session.
+-- This is the whole reason sport and movement joined the key on 2026-10-20:
+-- QTM records pitching and hitting for one athlete on one day, and the
+-- three-column key collapsed them into a single session.
+INSERT IGNORE INTO `capture_session`
+  (`id`, `anonymous_capture_subject_id`, `station_source_id`, `capture_date`,
+   `sport`, `movement`)
+  SELECT 9004, 9001, `id`, '2026-09-10', 'softball', 'pitching'
+    FROM `station_source` WHERE `code` = 'cv_app';
+SELECT IF(ROW_COUNT() = 1, 'PASS', 'FAIL')                           AS result,
+       'a different movement on the same day is a new session'       AS check_name;
+
+INSERT IGNORE INTO `capture_session`
+  (`id`, `anonymous_capture_subject_id`, `station_source_id`, `capture_date`,
+   `sport`, `movement`)
+  SELECT 9005, 9001, `id`, '2026-09-10', 'softball', 'pitching'
+    FROM `station_source` WHERE `code` = 'cv_app';
+SELECT IF(ROW_COUNT() = 0, 'PASS', 'FAIL')                           AS result,
+       'the same sport+movement twice in a day is still rejected'    AS check_name;
 
 -- ============================================================
 -- 6. capture_trial: a repeat measurement is a new trial, never an overwrite
@@ -225,7 +245,7 @@ SELECT IF(COUNT(*) = 4, 'PASS', CONCAT('FAIL: found ', COUNT(*), ' of 4'))  AS r
 -- ---------------------------------------------------------------- teardown
 DELETE FROM `lab_movement_screen` WHERE `capture_trial_id` IN (9001, 9002, 9003, 9004);
 DELETE FROM `capture_trial`       WHERE `id` IN (9001, 9002, 9003, 9004);
-DELETE FROM `capture_session`     WHERE `id` IN (9001, 9002, 9003);
+DELETE FROM `capture_session`     WHERE `id` IN (9001, 9002, 9003, 9004, 9005);
 -- Both of these tables self-reference (previous_*_id), and DELETE ... IN (...)
 -- does not honour the order you list, so break the chains first.
 UPDATE `subject_tag_binding` SET `previous_binding_id`    = NULL WHERE `id` IN (9001, 9002, 9003, 9004);

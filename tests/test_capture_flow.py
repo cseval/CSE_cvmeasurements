@@ -17,7 +17,11 @@ than by Python:
   4. An unclaimed band still captures, and reports enrolled=False. Identity
      binding is optional for capture and must never gate it.
   5. A malformed scan is logged, not raised, and does not create a subject.
-  6. Two saves in a day are two TRIALS in one session — never an overwrite.
+  6. Two saves in a day are two TRIALS in one session — never an overwrite,
+     and exactly one capture_session row with trial_numbers 1 and 2. The
+     session key gained sport and movement on 2026-10-20, and CV must write
+     '' for both: a NULL in a MySQL unique key is distinct from every other
+     NULL, which would turn every save into its own session.
   7. A retried save with the same client_ref does not duplicate the trial.
   8. Measurements round-trip in decimal centimetres.
   9. An implausible value raises a scale warning.
@@ -263,6 +267,80 @@ def main():
     check("height stored as decimal cm", float(stored["height_cm"]) == 170.25, str(stored))
     check("wingspan keeps sub-inch precision", float(stored["wingspan_cm"]) == 172.50,
           str(stored["wingspan_cm"]))
+
+    # ------------------------------------------------------------------ 6b
+    # The same claim as 6, but asked of the database rather than of the return
+    # values. Those could agree with each other and still be wrong about what
+    # was written.
+    #
+    # This is also the regression test for CV writing NULL into sport or
+    # movement. MySQL treats each NULL in a unique key as distinct, so a NULL
+    # would silently disable the dedupe and this would see two session rows.
+    with db._tx() as (_, cur):
+        cur.execute(
+            """SELECT `id`, `sport`, `movement` FROM `capture_session`
+                WHERE `anonymous_capture_subject_id` = %s
+                  AND `capture_date` = %s""",
+            (r1["subject_id"], db.lab_today()),
+        )
+        sessions = cur.fetchall()
+        cur.execute(
+            "SELECT `trial_number` FROM `capture_trial` "
+            "WHERE `capture_session_id` = %s ORDER BY `trial_number`",
+            (s1["capture_session_id"],),
+        )
+        numbers = [r["trial_number"] for r in cur.fetchall()]
+
+    check("two saves in a day land in exactly ONE capture_session",
+          len(sessions) == 1, f"{len(sessions)} rows: {sessions}")
+    check("that session holds trial_numbers 1 and 2",
+          numbers == [1, 2], str(numbers))
+    check("CV writes '' for sport and movement, never NULL",
+          bool(sessions) and sessions[0]["sport"] == ""
+          and sessions[0]["movement"] == "",
+          str(sessions[0] if sessions else None))
+
+    # ------------------------------------------------------------------ 6c
+    # Same subject, same station, same day, different SPORT — a different
+    # session. This is what the five-column key exists for, and it is the only
+    # thing that exercises the fallback SELECT's new sport/movement
+    # predicates: match on the first three columns only and this returns the
+    # '' session instead of creating the softball one.
+    #
+    # "Softball" rather than "softball" on purpose: the value is part of a key,
+    # so it is stripped and lowercased before it is written or matched.
+    s_sport = db.save_capture(
+        subject_id=r1["subject_id"], station_code=station,
+        client_ref=f"test-{uuid.uuid4()}",
+        height_cm=170.0, operator="tester", sport="  Softball  ",
+    )
+    check("a different sport on the same day is a different session",
+          s_sport["capture_session_id"] != s1["capture_session_id"],
+          f"{s_sport['capture_session_id']} vs {s1['capture_session_id']}")
+    check("the new session's trial numbering restarts at 1",
+          s_sport["trial_number"] == 1, str(s_sport["trial_number"]))
+
+    with db._tx() as (_, cur):
+        cur.execute("SELECT `sport`, `movement` FROM `capture_session` WHERE `id` = %s",
+                    (s_sport["capture_session_id"],))
+        sport_row = cur.fetchone()
+    check("sport is stored stripped and lowercased",
+          sport_row["sport"] == "softball" and sport_row["movement"] == "",
+          str(sport_row))
+
+    # And a second softball save that day must rejoin that session, not make a
+    # third one — the fallback SELECT has to FIND the row it just failed to
+    # insert, which is the half of the change most likely to regress.
+    s_sport2 = db.save_capture(
+        subject_id=r1["subject_id"], station_code=station,
+        client_ref=f"test-{uuid.uuid4()}",
+        height_cm=170.5, operator="tester", sport="softball",
+    )
+    check("a second save for that sport rejoins the same session",
+          s_sport2["capture_session_id"] == s_sport["capture_session_id"],
+          f"{s_sport2['capture_session_id']} vs {s_sport['capture_session_id']}")
+    check("and becomes trial 2 of it", s_sport2["trial_number"] == 2,
+          str(s_sport2["trial_number"]))
     check("px_per_cm retained for rescaling", float(stored["px_per_cm"]) == 8.125,
           str(stored["px_per_cm"]))
 

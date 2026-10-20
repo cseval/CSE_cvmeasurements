@@ -240,9 +240,18 @@ CREATE TABLE `capture_session` (
   `sport` VARCHAR(20) NOT NULL DEFAULT '' COMMENT 'Part of the unique key, so NOT NULL DEFAULT '''' rather than nullable: MySQL treats NULLs in a unique key as distinct from one another, and a single NULL would make every session unique and switch the dedupe off. CV writes ''''.',
   `movement` VARCHAR(20) NOT NULL DEFAULT '' COMMENT 'pitching / hitting / etc. Added 2026-10-20 so QTM can record more than one movement for an athlete on one day. CV writes ''''. Same NOT NULL DEFAULT '''' reasoning as sport.',
   `session_type` VARCHAR(30),
+  -- Reconciled against live 2026-10-20: live still carries Schema A's
+  -- free-text source_device, nullable and unwritten, alongside the
+  -- station_source_id FK that was supposed to replace it. Kept here so the
+  -- fixture matches, but it is dead weight and a trap — anything that starts
+  -- populating it reintroduces the free-text station problem station_source
+  -- exists to prevent.
+  `source_device` VARCHAR(50) NULL COMMENT 'Vestigial. Use station_source_id.',
   `operator` VARCHAR(100) COMMENT 'Staff identifier for the operator running the station. Staff, not athlete — this is not subject PII.',
   `source_import_batch_id` INT NULL,
-  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  -- No created_at: live does not have one. The fixture did, which is the
+  -- dangerous direction for drift — code selecting it would pass in tests and
+  -- fail in production.
   FOREIGN KEY (`anonymous_capture_subject_id`) REFERENCES `anonymous_capture_subject` (`id`),
   FOREIGN KEY (`event_session_id`) REFERENCES `event_session` (`id`),
   FOREIGN KEY (`station_source_id`) REFERENCES `station_source` (`id`),
@@ -260,23 +269,35 @@ CREATE TABLE `capture_session` (
   UNIQUE KEY `uq_session_subject_station_date_sport_movement`
     (`anonymous_capture_subject_id`, `station_source_id`, `capture_date`,
      `sport`, `movement`),
-  INDEX `ix_session_date_station` (`capture_date`, `station_source_id`)
+  -- Index names and column order follow live, reconciled 2026-10-20.
+  INDEX `ix_capture_session_station_date` (`station_source_id`, `capture_date`),
+  INDEX `ix_capture_session_subject_date` (`anonymous_capture_subject_id`, `capture_date`)
 ) COMMENT = 'Generalized parent for a lab visit / station visit. No identity column.';
 
 CREATE TABLE `capture_trial` (
   `id` INT PRIMARY KEY AUTO_INCREMENT,
   `capture_session_id` INT NOT NULL,
-  `trial_number` INT NOT NULL COMMENT 'Sequential within the session, starting at 1. Every save creates a NEW trial — a repeat measurement never overwrites an earlier one.',
-  `trial_type` VARCHAR(30) NOT NULL COMMENT 'pitch / swing / movement_screen / etc. The CV measurement app writes movement_screen. Nothing downstream can distinguish trial kinds without this.',
-  `trial_timestamp` DATETIME(3) NOT NULL COMMENT 'UTC. DATETIME(3) not TIMESTAMP: millisecond precision, and no 2038 ceiling.',
+  -- These three are NULLABLE in live as of 2026-10-20, and the fixture now
+  -- matches so tests are not run against a stricter schema than production.
+  -- Worth tightening in live: db.py always writes all three, uq_trial_session_
+  -- number cannot do its job with a NULL trial_number (MySQL treats each NULL
+  -- in a unique key as distinct), and a trial with no timestamp is unjoinable
+  -- to the binding that was active when it happened.
+  `trial_number` INT NULL COMMENT 'Sequential within the session, starting at 1. Every save creates a NEW trial — a repeat measurement never overwrites an earlier one.',
+  `trial_type` VARCHAR(30) NULL COMMENT 'pitch / swing / movement_screen / etc. The CV measurement app writes movement_screen. Nothing downstream can distinguish trial kinds without this.',
+  `trial_timestamp` DATETIME(3) NULL COMMENT 'UTC. DATETIME(3) not TIMESTAMP: millisecond precision, and no 2038 ceiling.',
   `device_file` VARCHAR(300),
-  `side` VARCHAR(1) COMMENT 'handedness/side, 1 or 2 as applicable',
+  `side` VARCHAR(20) COMMENT 'handedness/side, 1 or 2 as applicable',
   `validity_flag` TINYINT DEFAULT 1,
   `notes` VARCHAR(255),
-  `client_ref` VARCHAR(64) NULL UNIQUE COMMENT 'Idempotency key minted on the station device before the first send attempt. The station writes locally first and retries in the background, so the same trial WILL be submitted more than once whenever wifi drops mid-request — the UNIQUE constraint here is what makes that retry safe instead of duplicating the athlete''s measurement.',
+  `client_ref` VARCHAR(64) NULL COMMENT 'Idempotency key minted on the station device before the first send attempt. The station writes locally first and retries in the background, so the same trial WILL be submitted more than once whenever wifi drops mid-request — the UNIQUE constraint here is what makes that retry safe instead of duplicating the athlete''s measurement.',
   FOREIGN KEY (`capture_session_id`) REFERENCES `capture_session` (`id`) ON DELETE RESTRICT,
-  -- Named to match the live database, where it was applied on 2026-10-20.
+  -- Names and the extra index follow live, reconciled 2026-10-20. The
+  -- client_ref key is named rather than left as MySQL's auto-generated
+  -- `client_ref`, which is what live carries.
+  UNIQUE KEY `uq_capture_trial_client_ref` (`client_ref`),
   UNIQUE KEY `uq_trial_session_number` (`capture_session_id`, `trial_number`),
+  INDEX `ix_capture_trial_session_type` (`capture_session_id`, `trial_type`, `trial_number`),
   INDEX `ix_trial_type_time` (`trial_type`, `trial_timestamp`)
 );
 

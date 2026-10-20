@@ -228,7 +228,19 @@ SELECT IF(COUNT(*) = 0, 'PASS', CONCAT('FAIL: ', GROUP_CONCAT(CONCAT(`TABLE_NAME
    AND `COLUMN_NAME` IN ('athlete_id', 'player_id', 'cse_player_id', 'first_name', 'last_name', 'email', 'dob', 'date_of_birth')
    AND `TABLE_NAME` NOT IN ('athlete', 'entity_crosswalk', 'guardian',
                             'guardian_athlete_relationship', 'nfc_tag_assignment',
-                            'event_roster_entry');
+                            'event_roster_entry',
+                            -- Added 2026-10-20. This is the table whose entire
+                            -- job is linking a subject to an athlete, so it
+                            -- holds athlete_id by design. See sql/03.
+                            'subject_identity_binding');
+
+-- NOTE, 2026-10-20: run against LIVE rather than a fixture, the check above
+-- will report failures that are not leaks. Live has tables this allowlist
+-- predates — player, parent_athlete_relationship, athlete_merge_history,
+-- checkin_pairing_event, binder_pairing_event, event_team — and live calls
+-- the guardian concept `parent*`, so the two guardian entries here match
+-- nothing. Reconcile the list against the live table set before treating a
+-- failure here as real.
 
 -- ============================================================
 -- 9. The generated columns are still present and still indexed

@@ -6,6 +6,13 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- Home-screen label. Without this iOS falls back to <title> and truncates
+         it to roughly "CV Measure…" under the icon. -->
+    <meta name="apple-mobile-web-app-title" content="CV Lab" />
+    <!-- 180x180, opaque: iOS composites any transparency onto black, and masks
+         the corners itself, so the file must be square and flat. -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
     <title>CV Measurements</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">

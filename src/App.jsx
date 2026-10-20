@@ -41,6 +41,10 @@ export default function App() {
   const [error, setError] = useState(null)
 
   const [clientRef, setClientRef] = useState(null)
+  // The shutter moment, carried to the server with the save. A capture that
+  // queues through an outage can sync hours or a day later, and without this
+  // the server dates it when the queue drained rather than when it happened.
+  const [capturedAt, setCapturedAt] = useState(null)
   const [queued, setQueued] = useState(null)
   const [testMode, setTestMode] = useState(false)
   const [auditCounts, setAuditCounts] = useState(null)
@@ -159,6 +163,7 @@ export default function App() {
   const handleCapture = useCallback(async (blob) => {
     setProcessing(true)
     setError(null)
+    setCapturedAt(new Date().toISOString())
     try {
       const data = await measure(blob, config.markerCm)
       setResults(data)
@@ -194,6 +199,7 @@ export default function App() {
         ? { raw_uid: subject.raw_uid, device_label: config.deviceLabel || null }
         : { subject_id: subject.subject_id }),
       client_ref: clientRef,
+      captured_at: capturedAt,
       height_cm: display.height_cm ?? null,
       wingspan_cm: display.wingspan_cm ?? null,
       hand_span_cm: display.hand_width_cm ?? null,
@@ -221,7 +227,7 @@ export default function App() {
     })
     setQueued(record)
     return record
-  }, [testMode, subject, clientRef, config, results])
+  }, [testMode, subject, clientRef, capturedAt, config, results])
 
   const handleAdditionalSave = useCallback(async (fields) => {
     if (!clientRef) return
@@ -235,6 +241,7 @@ export default function App() {
     setError(null)
     setSubject(null)
     setClientRef(null)
+    setCapturedAt(null)
     setQueued(null)
     setTapStatus('waiting')
     setTapReason(null)

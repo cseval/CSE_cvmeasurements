@@ -33,6 +33,7 @@ import logging
 import os
 import secrets
 import tempfile
+from datetime import datetime
 
 # Must be set before mediapipe imports so model downloads work on macOS
 try:
@@ -117,6 +118,10 @@ async def health():
         "auth_enabled": bool(_KEYS),
         "artifact_backend": artifacts.describe_backend(),
         "marker_sizes_cm": sorted(ALL_SIZES),
+        # Surfaced so a wrong LAB_TIMEZONE is visible here rather than being
+        # inferred a week later from capture dates that are off by one.
+        "lab_timezone": db.LAB_TIMEZONE,
+        "lab_date": db.lab_today().isoformat(),
     }
 
 
@@ -218,6 +223,13 @@ class CaptureSaveRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=255)
     scan_event_id: int | None = None
     station_code: str | None = Field(default=None, max_length=30)
+    captured_at: datetime | None = Field(
+        default=None,
+        description="ISO 8601 instant the measurement was taken, from the "
+                    "device clock. A capture queued during an outage can sync "
+                    "hours later, and this is what keeps it dated to the day "
+                    "it actually happened. Omitted means server time.",
+    )
 
 
 @app.post("/api/capture/save", dependencies=[Depends(require_station_key)])
@@ -330,7 +342,11 @@ async def capture_photo(
 @app.get("/api/station/audit", dependencies=[Depends(require_station_key)])
 async def station_audit(
     station_code: str | None = Query(default=None),
-    on_date: str | None = Query(default=None, description="YYYY-MM-DD, defaults to today"),
+    on_date: str | None = Query(
+        default=None,
+        description="YYYY-MM-DD in the lab's timezone, defaults to the "
+                    "lab-local today (not the server's UTC today)",
+    ),
 ):
     from datetime import date as _date
     try:

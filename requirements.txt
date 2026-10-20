@@ -8,6 +8,12 @@ python-multipart>=0.0.9
 mysql-connector-python>=8.0.0
 python-dotenv>=1.0.0
 
+# zoneinfo is stdlib, but it reads the OS timezone database. Slim container
+# images sometimes ship without one, and the failure mode is an exception at
+# import of db.py rather than anything subtle. This pins a copy in the venv so
+# LAB_TIMEZONE resolves regardless of the base image.
+tzdata>=2024.1
+
 # Optional — only needed when ARTIFACT_AZURE_CONTAINER is set, so that capture
 # photos go to Blob storage instead of App Service local disk (which does not
 # survive a redeploy or a scale-out). artifacts.py imports these lazily.

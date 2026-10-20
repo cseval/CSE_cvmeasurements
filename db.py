@@ -35,7 +35,8 @@ Two rules this module exists to keep.
 import logging
 import os
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import mysql.connector
 from dotenv import load_dotenv
@@ -47,6 +48,29 @@ load_dotenv()
 log = logging.getLogger(__name__)
 
 TRIAL_TYPE = "movement_screen"
+
+# ----------------------------------------------------------------- lab time
+#
+# Instants are stored in UTC. Calendar dates are NOT derived from UTC.
+#
+# capture_date and the station audit are civil dates — "the day the athlete was
+# in the building" — and Denver is UTC-6 or UTC-7, so the UTC date rolls over at
+# 6pm local in summer and 5pm in winter, in the middle of an evening session.
+# Taking capture_date from the server's UTC date did two things:
+#
+#   - evening sessions were labelled with tomorrow's date
+#   - capture_session is UNIQUE (subject, station, capture_date), so an athlete
+#     measured at 17:55 and again at 18:05 was split across two sessions
+#
+# The second one is the real damage, because it is silent.
+LAB_TIMEZONE = os.getenv("LAB_TIMEZONE", "America/Denver")
+try:
+    _LAB_TZ = ZoneInfo(LAB_TIMEZONE)
+except Exception:
+    log.error("LAB_TIMEZONE=%r is not a valid IANA zone name; "
+              "falling back to America/Denver", LAB_TIMEZONE)
+    LAB_TIMEZONE = "America/Denver"
+    _LAB_TZ = ZoneInfo(LAB_TIMEZONE)
 
 # Plausible human ranges, used only to raise a scale warning. This is the sole
 # check available on the operator-selected marker size: the pipeline derives
@@ -99,6 +123,71 @@ def _tx():
 
 def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Naive datetimes are already UTC in this module; aware ones are converted."""
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _lab_date(instant: datetime | None = None) -> date:
+    """The lab-local calendar date for a UTC instant, defaulting to now."""
+    instant = _utcnow() if instant is None else _as_utc(instant)
+    return instant.replace(tzinfo=timezone.utc).astimezone(_LAB_TZ).date()
+
+
+def lab_today() -> date:
+    """The lab-local calendar date right now. Public: the health check reports it."""
+    return _lab_date()
+
+
+def _lab_day_bounds_utc(on_date: date) -> tuple[datetime, datetime]:
+    """
+    The half-open UTC range [start, end) covering one lab-local calendar day.
+
+    Used in place of DATE(CONVERT_TZ(scanned_at, ...)) for two reasons. Azure
+    MySQL does not ship the timezone tables CONVERT_TZ needs, so that call
+    returns NULL there rather than failing loudly. And wrapping the column in
+    any function makes the index on scanned_at unusable.
+
+    Adding one DAY to local midnight rather than 24 HOURS is deliberate: on the
+    two DST changeover days the span is 23 or 25 hours, which is correct.
+    """
+    start_local = datetime.combine(on_date, time.min, tzinfo=_LAB_TZ)
+    end_local = start_local + timedelta(days=1)
+    return (start_local.astimezone(timezone.utc).replace(tzinfo=None),
+            end_local.astimezone(timezone.utc).replace(tzinfo=None))
+
+
+def _coerce_captured_at(captured_at) -> datetime:
+    """
+    When the station says the measurement was taken, as naive UTC.
+
+    The past is expected and accepted: a capture queued during an outage may
+    sync hours or days later, and dating it at sync time is exactly the bug
+    this argument exists to fix.
+
+    The future is not accepted. A device with a badly wrong clock would
+    otherwise stamp a trial into next year and file it under a capture_session
+    nobody will ever look at. More than an hour ahead of the server falls back
+    to server time, which is wrong by at most the length of the outage rather
+    than by years.
+    """
+    if captured_at is None:
+        return _utcnow()
+    try:
+        instant = _as_utc(captured_at)
+    except (AttributeError, TypeError, ValueError):
+        log.warning("captured_at=%r is not a datetime; using server time", captured_at)
+        return _utcnow()
+    now = _utcnow()
+    if instant > now + timedelta(hours=1):
+        log.warning("captured_at=%s is ahead of the server clock; using server time",
+                    instant)
+        return now
+    return instant
 
 
 def ping() -> bool:
@@ -356,7 +445,7 @@ def _scale_warning(values: dict) -> str | None:
 
 def _get_or_create_session(cur, *, subject_id, station_source_id,
                            event_session_id, lab_location, session_type,
-                           sport, operator) -> int:
+                           sport, operator, capture_date) -> int:
     """
     One capture_session per subject per station per day (uniquely constrained).
 
@@ -364,8 +453,13 @@ def _get_or_create_session(cur, *, subject_id, station_source_id,
     visit next week is a new session. INSERT IGNORE then SELECT rather than
     SELECT then INSERT, so two operators saving at once cannot both decide the
     session does not exist yet.
+
+    capture_date is supplied by the caller, derived from the lab-local day of
+    the capture instant. It is deliberately not computed here from the server
+    clock: that put the 18:00 MDT UTC rollover in the middle of the unique key
+    and split evening athletes across two sessions.
     """
-    today = date.today()
+    today = capture_date
     cur.execute(
         """INSERT IGNORE INTO `capture_session`
              (`anonymous_capture_subject_id`, `event_session_id`, `station_source_id`,
@@ -393,7 +487,7 @@ def save_capture(*, station_code: str, client_ref: str, subject_id: int | None =
                  marker_cm=None, px_per_cm=None, cv_warnings=None,
                  event_session_id=None, lab_location=None, session_type=None,
                  sport=None, operator=None, notes=None, device_label=None,
-                 scan_event_id=None) -> dict:
+                 scan_event_id=None, captured_at=None) -> dict:
     """
     Write one movement-screen trial.
 
@@ -422,6 +516,13 @@ def save_capture(*, station_code: str, client_ref: str, subject_id: int | None =
     """
     if not client_ref:
         raise ValueError("client_ref is required — it is what makes a retry safe")
+
+    # When the measurement happened, not when it reached us. For an online save
+    # those are seconds apart; for one that sat in the device queue through an
+    # outage they can be a day apart, and it is the former that decides both
+    # trial_timestamp and which lab-local day the session belongs to.
+    captured_utc = _coerce_captured_at(captured_at)
+    capture_date = _lab_date(captured_utc)
     if bool(subject_id) == bool(raw_uid):
         raise ValueError("pass exactly one of subject_id or raw_uid")
 
@@ -478,6 +579,7 @@ def save_capture(*, station_code: str, client_ref: str, subject_id: int | None =
             cur, subject_id=subject_id, station_source_id=station_source_id,
             event_session_id=event_session_id, lab_location=lab_location,
             session_type=session_type, sport=sport, operator=operator,
+            capture_date=capture_date,
         )
 
         cur.execute(
@@ -492,7 +594,7 @@ def save_capture(*, station_code: str, client_ref: str, subject_id: int | None =
                  (`capture_session_id`, `trial_number`, `trial_type`,
                   `trial_timestamp`, `validity_flag`, `client_ref`)
                VALUES (%s, %s, %s, %s, 1, %s)""",
-            (session_id, trial_number, TRIAL_TYPE, _utcnow(), client_ref),
+            (session_id, trial_number, TRIAL_TYPE, captured_utc, client_ref),
         )
         trial_id = cur.lastrowid
 
@@ -517,6 +619,10 @@ def save_capture(*, station_code: str, client_ref: str, subject_id: int | None =
              measurement_method, height_method, wingspan_method,
              hand_span_method, marker_cm, px_per_cm, warning,
              "\n".join(cv_warnings) if cv_warnings else None,
+             # recorded_at stays the moment the row was written, which is
+             # not the same thing as trial_timestamp above. For a queued
+             # capture the gap between them is the length of the outage, and
+             # that gap is worth being able to see.
              notes[:500] if notes else None, _utcnow()),
         )
         screen_id = cur.lastrowid
@@ -644,7 +750,11 @@ def station_audit(station_code: str, on_date: date | None = None) -> dict:
 
     Returns counts and the raw scan values behind them — no identity.
     """
-    on_date = on_date or date.today()
+    # Defaulting to the UTC date meant that after 6pm the audit silently
+    # rolled to "tomorrow" and reported zero taps — at exactly the hour staff
+    # use it to catch unprovisioned bands before athletes leave the building.
+    on_date = on_date or _lab_date()
+    day_start, day_end = _lab_day_bounds_utc(on_date)
     with _tx() as (_, cur):
         station_source_id = get_station_source_id(cur, station_code)
 
@@ -661,8 +771,9 @@ def station_audit(station_code: str, on_date: date | None = None) -> dict:
                  SUM(`resolved` = 1 AND `enrolled` = 0)            AS unenrolled,
                  SUM(`resolved` = 1 AND `capture_trial_id` IS NULL) AS no_data
                FROM `scan_event`
-              WHERE `station_source_id` = %s AND DATE(`scanned_at`) = %s""",
-            (station_source_id, on_date),
+              WHERE `station_source_id` = %s
+                AND `scanned_at` >= %s AND `scanned_at` < %s""",
+            (station_source_id, day_start, day_end),
         )
         counts = {k: int(v or 0) for k, v in cur.fetchone().items()}
 
@@ -672,17 +783,18 @@ def station_audit(station_code: str, on_date: date | None = None) -> dict:
             """SELECT `id`, `raw_scan_value`, `scanned_at`, `valid_shape`,
                       `resolved`, `enrolled`, `capture_trial_id`, `note`
                  FROM `scan_event`
-                WHERE `station_source_id` = %s AND DATE(`scanned_at`) = %s
+                WHERE `station_source_id` = %s
+                  AND `scanned_at` >= %s AND `scanned_at` < %s
                   AND (`valid_shape` = 0 OR `resolved` = 0
                        OR `enrolled` = 0 OR `capture_trial_id` IS NULL)
                 ORDER BY `scanned_at` DESC
                 LIMIT 100""",
-            (station_source_id, on_date),
+            (station_source_id, day_start, day_end),
         )
         needs_review = [
             {**r, "scanned_at": r["scanned_at"].isoformat()}
             for r in cur.fetchall()
         ]
 
-        return {"date": on_date.isoformat(), "counts": counts,
-                "needs_review": needs_review}
+        return {"date": on_date.isoformat(), "timezone": LAB_TIMEZONE,
+                "counts": counts, "needs_review": needs_review}

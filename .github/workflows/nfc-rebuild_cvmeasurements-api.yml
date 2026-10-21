@@ -7,7 +7,7 @@ name: Build and deploy Python app to Azure Web App - cvmeasurements-api
 on:
   push:
     branches:
-      - 'nfc-rebuild'
+      - 'main'
   workflow_dispatch:
 
 jobs:

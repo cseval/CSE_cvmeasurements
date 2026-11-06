@@ -450,3 +450,116 @@ def test_multipart_endpoints_are_guarded(monkeypatch):
     assert client.post("/api/capture/photo", files=files,
                        data={"capture_trial_id": 1, "capture_session_id": 1,
                              "subject_token": "TC-0000-0000"}).status_code == 401
+
+
+# --------------------------------------------------------- brute force
+
+import login_guard
+
+
+def _guard_app(monkeypatch, **extra):
+    monkeypatch.setenv("LOGIN_FAIL_DELAY_SECONDS", "0")   # no real sleeping
+    for k, v in extra.items():
+        monkeypatch.setenv(k, v)
+    importlib.reload(login_guard)
+    login_guard.reset()
+    server, client = _app(monkeypatch, DESK_PIN=DESK, ADMIN_PIN=ADMIN,
+                          DB_PASSWORD="p", AUTH_ENFORCE="true", STATION_API_KEYS=None)
+    importlib.reload(server)      # pick up the reloaded guard module
+    return server, TestClient(server.app)
+
+
+def _wrong(client, ip="203.0.113.7"):
+    return client.post("/api/login", json={"pin": "000000"},
+                       headers={"X-Forwarded-For": ip})
+
+
+def test_an_address_is_locked_out_after_enough_wrong_pins(monkeypatch):
+    _, client = _guard_app(monkeypatch, LOGIN_MAX_FAILS="5")
+    codes = [_wrong(client).status_code for _ in range(7)]
+    assert codes[:5] == [401] * 5, codes
+    assert codes[5] == 429, f"still answering after 5 wrong PINs: {codes}"
+
+
+def test_a_locked_address_cannot_use_the_right_pin_either(monkeypatch):
+    """Otherwise the lockout is bypassed the moment the PIN is guessed."""
+    _, client = _guard_app(monkeypatch, LOGIN_MAX_FAILS="3")
+    for _ in range(4):
+        _wrong(client)
+    r = client.post("/api/login", json={"pin": DESK},
+                    headers={"X-Forwarded-For": "203.0.113.7"})
+    assert r.status_code == 429
+    assert "Retry-After" in r.headers
+
+
+def test_the_lockout_is_per_address(monkeypatch):
+    _, client = _guard_app(monkeypatch, LOGIN_MAX_FAILS="3")
+    for _ in range(4):
+        _wrong(client, "203.0.113.7")
+    assert _wrong(client, "203.0.113.7").status_code == 429
+    r = client.post("/api/login", json={"pin": DESK},
+                    headers={"X-Forwarded-For": "198.51.100.2"})
+    assert r.status_code == 200, "one bad actor must not lock out the lab"
+
+
+def test_a_correct_pin_clears_the_record(monkeypatch):
+    """
+    A staffer who fat-fingers four times and then gets it right starts clean.
+
+    Asserted on the SECOND wrong PIN afterwards, not the first: with the
+    counter un-reset the fifth failure trips the lock but is still answered
+    401, so only the sixth reveals whether the reset happened.
+    """
+    _, client = _guard_app(monkeypatch, LOGIN_MAX_FAILS="5")
+    for _ in range(4):
+        _wrong(client)
+    assert client.post("/api/login", json={"pin": DESK},
+                       headers={"X-Forwarded-For": "203.0.113.7"}).status_code == 200
+    after = [_wrong(client).status_code for _ in range(2)]
+    assert after == [401, 401], f"the counter did not reset: {after}"
+
+
+def test_spoofing_the_address_still_slows_down(monkeypatch):
+    """
+    Per-address keying is only as good as X-Forwarded-For. A fresh address on
+    every request dodges the lockout entirely, so the global layer has to be
+    what makes it cost something. Measured in wall-clock, because a delay
+    that is not applied is the whole failure mode.
+    """
+    monkeypatch.setenv("LOGIN_FAIL_DELAY_SECONDS", "0.05")
+    _, client = _guard_app(monkeypatch, LOGIN_MAX_FAILS="3",
+                           LOGIN_GLOBAL_FAILS="5", LOGIN_FAIL_DELAY_SECONDS="0.05")
+    assert login_guard.DELAY_SECONDS == 0.05
+
+    started = time.monotonic()
+    for i in range(10):
+        assert _wrong(client, f"203.0.113.{i}").status_code == 401
+    elapsed = time.monotonic() - started
+
+    # Five get through free, the rest are delayed once the global count trips.
+    assert elapsed >= 0.2, f"rotating the address avoided the slowdown ({elapsed:.3f}s)"
+    assert login_guard.snapshot()["locked_out"] == 0, "no address repeated, so none should lock"
+
+
+def test_a_misconfigured_pin_does_not_lock_anyone_out(monkeypatch):
+    """A 503 is our fault, not an attempt."""
+    monkeypatch.setenv("LOGIN_FAIL_DELAY_SECONDS", "0")
+    importlib.reload(login_guard)
+    login_guard.reset()
+    server, client = _app(monkeypatch, DESK_PIN=None, ADMIN_PIN=None,
+                          DB_PASSWORD="p", AUTH_ENFORCE="true", STATION_API_KEYS=None)
+    importlib.reload(server)
+    c = TestClient(server.app)
+    for _ in range(15):
+        assert c.post("/api/login", json={"pin": "000000"},
+                      headers={"X-Forwarded-For": "203.0.113.9"}).status_code == 503
+    assert login_guard.locked_for("203.0.113.9") == 0
+
+
+def test_health_reports_guard_counts_and_no_addresses(monkeypatch):
+    _, client = _guard_app(monkeypatch, LOGIN_MAX_FAILS="3")
+    for _ in range(4):
+        _wrong(client, "203.0.113.7")
+    r = client.get("/api/health")
+    assert r.json()["login_guard"]["locked_out"] >= 1
+    assert "203.0.113.7" not in r.text, "health must not name who is locked out"

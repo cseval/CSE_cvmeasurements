@@ -48,7 +48,8 @@ try:
 except ImportError:
     pass
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import (Depends, FastAPI, File, Form, Header, HTTPException, Query,
+                     Request, UploadFile)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -56,6 +57,7 @@ from pydantic import BaseModel, Field
 import artifacts
 import auth
 import db
+import login_guard
 from generate_marker import ALL_SIZES, marker_pdf_bytes, marker_square_png_bytes
 from pipeline import run
 
@@ -185,6 +187,8 @@ async def health():
         "auth_enforced": AUTH_ENFORCE,
         "pin_login_ready": pin["ok"],
         "pin_login_problems": pin["problems"],
+        # Counts only. Never an address, never a PIN.
+        "login_guard": login_guard.snapshot(),
         "station_key_enabled": bool(_KEYS),
         "artifact_backend": artifacts.describe_backend(),
         "marker_sizes_cm": sorted(ALL_SIZES),
@@ -208,9 +212,32 @@ class LoginRequest(BaseModel):
 
 
 @app.post("/api/login")
-async def login(req: LoginRequest):
-    """Unauthenticated on purpose — it is how you become authenticated."""
-    return auth.login(req.pin, req.expires_at)
+async def login(req: LoginRequest, request: Request):
+    """
+    Unauthenticated on purpose — it is how you become authenticated.
+
+    Guarded, because a 6-digit PIN on a public URL is a million guesses and
+    the original design had no lockout at all. A correct PIN is never
+    delayed; see login_guard.py for what a wrong one costs.
+    """
+    key = login_guard.client_key(request)
+    wait = login_guard.locked_for(key)
+    if wait:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many wrong PINs. Try again in about {wait // 60 + 1} minutes.",
+            headers={"Retry-After": str(wait)},
+        )
+    try:
+        session = auth.login(req.pin, req.expires_at)
+    except HTTPException as exc:
+        # Only a wrong PIN is an attempt. A 503 means the PINs are not
+        # configured, which is our fault and must not lock anyone out.
+        if exc.status_code == 401:
+            await login_guard.penalise(key)
+        raise
+    login_guard.succeed(key)
+    return session
 
 
 @app.get("/api/me")

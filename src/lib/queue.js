@@ -22,9 +22,20 @@
  * On identity (invariant 3): nothing here holds a name, a cse_player_id or a
  * raw tag UID. Records key off client_ref and carry the opaque subject_token,
  * which is exactly what the whole schema is arranged to allow.
+ *
+ * On sessions: a PIN session expires, and it will expire mid-shift. An
+ * expired session is NOT a bad record — the payload is fine and the same
+ * request succeeds once someone logs back in. So a 401 never consumes an
+ * attempt, never parks a record as stalled, and never drops a photo. It
+ * suspends the queue, which resumes by itself on the next login.
+ *
+ * Enqueueing never requires a session at all. A measurement taken while
+ * logged out is written to IndexedDB exactly as one taken offline is, which
+ * is the only way invariant 2 can survive an expiry at the worst moment.
  */
 
-import { ApiError, saveAdditional, saveCapture, uploadPhoto } from './api.js'
+import { ApiError, isAuthError, saveAdditional, saveCapture, uploadPhoto } from './api.js'
+import { isLoggedIn, subscribe as subscribeAuth } from './auth.js'
 
 const DB_NAME = 'cv-station'
 const DB_VERSION = 1
@@ -156,6 +167,10 @@ export async function getStats() {
     pending: all.filter(r => r.status === 'pending').length,
     synced: all.filter(r => r.status === 'synced').length,
     stalled: all.filter(r => r.status === 'stalled').length,
+    // Pending only because nobody is logged in. Shown separately so the
+    // header can say "waiting for login" rather than implying a failure.
+    authBlocked: all.filter(r => r.status === 'pending' && r.auth_blocked).length,
+    loggedIn: isLoggedIn(),
     oldestPending: all
       .filter(r => r.status === 'pending')
       .map(r => r.created_at)
@@ -182,6 +197,14 @@ function backoff(attempts) {
  */
 export async function flush() {
   if (flushing) return
+  // No session means every send is a guaranteed 401. Stop before the network,
+  // so a logged-out shift does not burn the retry budget of records that are
+  // perfectly good. startSync() re-runs this the moment a login lands.
+  if (!isLoggedIn()) {
+    notify()
+    schedule()
+    return
+  }
   flushing = true
   try {
     const all = await tx('readonly', store => req(store.getAll()))
@@ -236,6 +259,12 @@ async function syncOne(record) {
     // the local record has none.
     const subjectToken = record.subject_token ?? result.subject_token ?? null
     const photoErrors = [...(record.photo_errors ?? [])]
+    // Photos that still need sending. The success path below empties this,
+    // and emptying it deletes the only copy — so a photo only leaves here
+    // once the server has it, or once the server has refused it in a way
+    // that retrying cannot fix.
+    const keptPhotos = []
+    let photosBlockedByAuth = false
     for (const photo of record.photos ?? []) {
       try {
         await uploadPhoto({
@@ -246,7 +275,19 @@ async function syncOne(record) {
           kind: photo.kind,
         })
       } catch (err) {
-        photoErrors.push(`${photo.kind}: ${err.message}`)
+        // 400 (wrong kind) and 413 (too large) will fail identically forever;
+        // keeping those blobs just fills the storage quota. Everything else —
+        // an expired session above all — is worth another go.
+        const hopeless = err instanceof ApiError &&
+          !isAuthError(err) &&
+          err.status >= 400 && err.status < 500 &&
+          err.status !== 408 && err.status !== 429
+        if (hopeless) {
+          photoErrors.push(`${photo.kind}: ${err.message}`)
+        } else {
+          keptPhotos.push(photo)
+          if (isAuthError(err)) photosBlockedByAuth = true
+        }
       }
     }
 
@@ -266,25 +307,58 @@ async function syncOne(record) {
       additionalSynced = true
     }
 
+    // The measurement is in the database either way — `result` proves it, and
+    // it is never re-sent. What is left is whether the photos got there. If
+    // some are still owed the record stays pending so they are retried; it is
+    // the blobs that are at stake, not the measurement.
+    const done = keptPhotos.length === 0
+    // attempts increments either way: a photo endpoint that fails forever
+    // must still reach MAX_ATTEMPTS and park, or this retries until the
+    // device is rebooted.
     await tx('readwrite', store => store.put({
       ...record,
-      status: 'synced',
+      status: done ? 'synced'
+                   : (attempts >= MAX_ATTEMPTS ? 'stalled' : 'pending'),
       attempts,
       result,
       subject_token: subjectToken,
       additional_synced: additionalSynced,
-      // Drop the blobs once uploaded. A shift of full-resolution photos will
-      // fill the origin's storage quota and start failing local writes, which
-      // would break the one guarantee this queue makes.
-      photos: [],
+      auth_blocked: !done && photosBlockedByAuth,
+      // Dropping the blobs is what keeps a shift of full-resolution photos
+      // from filling the origin's storage quota and breaking local writes —
+      // but it happens only for photos the server actually took.
+      photos: keptPhotos,
       photo_errors: photoErrors.length ? photoErrors : null,
-      last_error: null,
+      last_error: done ? null
+                       : (photosBlockedByAuth ? 'waiting for login'
+                                              : 'photo upload incomplete, will retry'),
+      // An auth-blocked photo goes the instant a session returns; anything
+      // else waits out the backoff.
+      next_attempt_at: done || photosBlockedByAuth ? 0 : Date.now() + backoff(attempts),
     }))
-    return true
+    return done
   } catch (err) {
-    // A 4xx other than 408/429 will never succeed on retry — a malformed
-    // payload or a rejected station key. Park it for a human instead of
-    // hammering the API for the rest of the shift.
+    // An expired or rejected session is the one 4xx that says nothing about
+    // the record. Retrying is pointless until someone logs in, and stalling
+    // is wrong: it would take a human tapping "resend" to recover from a
+    // session simply running out overnight. Hold it, unchanged, and let the
+    // next login release it.
+    if (isAuthError(err)) {
+      await tx('readwrite', store => store.put({
+        ...record,
+        result,
+        status: 'pending',
+        attempts: record.attempts ?? 0,   // not this record's doing
+        auth_blocked: true,
+        last_error: 'waiting for login',
+        next_attempt_at: 0,               // go the instant a session returns
+      }))
+      return false
+    }
+
+    // Any other 4xx except 408/429 will never succeed on retry — a malformed
+    // payload, a rejected id. Park it for a human instead of hammering the
+    // API for the rest of the shift.
     const permanent = err instanceof ApiError &&
       err.status >= 400 && err.status < 500 &&
       err.status !== 408 && err.status !== 429
@@ -295,6 +369,7 @@ async function syncOne(record) {
       result,                       // keep whatever phase 1 achieved
       status: stalled ? 'stalled' : 'pending',
       attempts,
+      auth_blocked: false,
       last_error: err.message,
       next_attempt_at: Date.now() + backoff(attempts),
     }))
@@ -313,8 +388,13 @@ export function startSync() {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) flush()
   })
+  // A login is as much a reason to drain as the network coming back. Without
+  // this, everything held during an expiry would sit until the next timer
+  // tick, or until the operator noticed and tapped resend.
+  const unsubAuth = subscribeAuth(session => { if (session) flush() })
   return () => {
     window.removeEventListener('online', flush)
+    unsubAuth()
     if (timer) clearTimeout(timer)
   }
 }
@@ -324,7 +404,8 @@ export async function retryStalled() {
   const all = await tx('readonly', store => req(store.getAll()))
   for (const record of all.filter(r => r.status === 'stalled')) {
     await tx('readwrite', store => store.put({
-      ...record, status: 'pending', attempts: 0, next_attempt_at: 0,
+      ...record, status: 'pending', attempts: 0, auth_blocked: false,
+      next_attempt_at: 0,
     }))
   }
   notify()

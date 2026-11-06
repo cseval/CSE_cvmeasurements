@@ -1,19 +1,21 @@
 /**
  * API client for the station.
  *
- * Every request carries the station key. VITE_STATION_KEY is a build-time
- * value baked into the bundle, which means it is not a secret from anyone who
- * can open the app — it is a gate against the open internet, not against a
- * determined person holding the iPad. That is a deliberate step up from the
- * previous build, which had no auth of any kind and CORS set to "*", so
- * anyone with the URL could read the roster of any event by name.
+ * Every request carries the PIN session as `Authorization: Bearer <token>`.
+ * This replaced VITE_STATION_KEY, which was a build-time constant baked into
+ * the bundle: readable by anyone who loaded the page, identical on every
+ * station, and unchangeable without a redeploy.
  *
- * Rotate the key by redeploying both sides. Give each physical station its own
- * key so one can be revoked without touching the others.
+ * The one thing callers must handle is isAuthError(). A rejected session is
+ * not a bad request — the data is fine and the same call will succeed once
+ * someone logs back in. Treating it as permanent is how a queue loses a
+ * shift of measurements, so it is classified here rather than at each call
+ * site.
  */
 
+import { authHeader, onUnauthorized } from './auth.js'
+
 const BASE = import.meta.env.VITE_API_URL ?? ''
-const STATION_KEY = import.meta.env.VITE_STATION_KEY ?? ''
 
 export class ApiError extends Error {
   constructor(message, status, body) {
@@ -23,15 +25,23 @@ export class ApiError extends Error {
   }
 }
 
+/** A rejected or expired session: retriable after a login, never permanent. */
+export function isAuthError(err) {
+  return err instanceof ApiError && (err.status === 401 || err.status === 403)
+}
+
 function headers(extra = {}) {
-  const h = { ...extra }
-  if (STATION_KEY) h['X-Station-Key'] = STATION_KEY
-  return h
+  return { ...extra, ...authHeader() }
 }
 
 async function parse(res) {
   const body = await res.json().catch(() => null)
   if (!res.ok) {
+    if (res.status === 401) {
+      // Drop the dead session so the app prompts for the PIN, instead of
+      // every later request failing quietly in the background.
+      onUnauthorized()
+    }
     throw new ApiError(body?.detail || `Server error ${res.status}`, res.status, body)
   }
   return body
@@ -123,4 +133,8 @@ export function uploadPhoto({ blob, captureTrialId, captureSessionId, subjectTok
   return postForm('/api/capture/photo', fd)
 }
 
+// Public on purpose, and used as a plain href — it cannot carry a header.
 export const markerPdfUrl = (cm) => `${BASE}/api/marker/${cm}/pdf`
+
+/** Does this device still hold a usable session, as far as the server agrees? */
+export const fetchMe = () => getJson('/api/me', { timeoutMs: 6000 })

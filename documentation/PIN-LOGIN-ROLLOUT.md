@@ -8,11 +8,13 @@ that is live at the time**, and every step is reversible without a redeploy.
 That costs one extra environment variable, `AUTH_ENFORCE`, and one extra
 merge at the end to take the scaffolding back out.
 
-The order matters in exactly one way: the PINs go on the server **before**
-the frontend that asks for them. Everything after that is reversible.
+The API and the frontend live in one repo, but they do **not** have to ship
+together: the Azure workflow can be run by hand against the feature branch,
+so the new backend goes in front of the current station before anything
+user-facing changes. That is what lets each half be proved separately.
 
-Read this once before starting. Steps 2 and 4 are the ones that change
-behaviour; everything else is positioning.
+Read this once before starting. Steps 3 and 5 are the ones users notice;
+everything else is positioning.
 
 ---
 
@@ -26,9 +28,13 @@ behaviour; everything else is positioning.
 | Check-in | Branch `feature/pin-login-guard` in `CSE_checkin` — the matching brute-force guard, deployed from `checkin-v1` |
 
 Today the CV API accepts **anonymous requests**: `STATION_API_KEYS` has
-always been empty on the App Service, so `auth_enabled` has been reporting
-`false` and every endpoint answers anyone with the URL. The repo is public.
-That is the thing this fixes.
+always been empty on the App Service, so `auth_enabled` reports `false` and
+every endpoint answers anyone with the URL. The repo is public. That is the
+thing this fixes.
+
+`auth_enabled` is also the quickest way to tell which backend is deployed.
+The old one reports it; the new one replaces it with `auth_enforced`,
+`pin_login_ready` and `login_guard`.
 
 ---
 
@@ -55,138 +61,167 @@ numbers now and use the same pair in both places.
 
 ## Step 1 — Set the PINs on the App Service
 
-Do this **first**, before anything deploys. The station that is live right now
-sends no login at all, so adding PINs to the server changes nothing for it —
-but it means that the moment the new frontend appears, there is something for
-it to sign in against.
+Nothing deploys here. The station that is live right now sends no login at
+all, so adding PINs changes nothing for it — they just sit there until there
+is code that reads them.
 
-1. Go to **portal.azure.com**.
-2. In the top search bar type **cvmeasurements-api** and click the **App
+1. **portal.azure.com** → search **cvmeasurements-api** → click the **App
    Service** result.
-3. In the left menu, under **Settings**, click **Environment variables**.
-   *(On an older portal this is **Configuration** → **Application settings**
-   — same thing.)*
-4. Click **+ Add**. **Name:** `DESK_PIN` — **Value:** the 6-digit desk PIN.
-   Click **Apply**.
-5. Click **+ Add** again. **Name:** `ADMIN_PIN` — **Value:** the 6-digit admin
-   PIN. Click **Apply**.
-6. Check **ALLOWED_ORIGINS** in the same list. If it is missing or empty,
-   click **+ Add**, **Name:** `ALLOWED_ORIGINS`, and set the value to BOTH
-   the production origin and the feature branch's preview origin, comma
-   separated, no trailing slashes:
+2. Left menu, under **Settings** → **Environment variables**. *(Older portal:
+   **Configuration** → **Application settings**.)* Stay on the **App
+   settings** tab.
+3. **+ Add** → **Name:** `DESK_PIN`, **Value:** the 6-digit desk PIN →
+   **Apply**.
+4. **+ Add** → **Name:** `ADMIN_PIN`, **Value:** the 6-digit admin PIN →
+   **Apply**.
+5. Find **ALLOWED_ORIGINS**. If it is missing or empty, **+ Add** →
+   **Name:** `ALLOWED_ORIGINS` → value (comma separated, no spaces, no
+   trailing slashes):
 
    ```
    https://cv-measurements.vercel.app,https://cv-measurements-git-feature-pin-login-college-sports-evaluation.vercel.app
    ```
 
-   The preview origin is in there so the dry run below works. Trim it back to
-   the production origin alone at step 6. Leaving the variable empty means
+   The second origin is the feature branch's preview build, needed for the
+   dry run in step 2. Trim it back to production alone at step 7. Empty means
    CORS falls back to `*`, which is what it does today.
-7. Do **not** add `AUTH_ENFORCE` yet. That is step 4.
-8. Click **Apply** at the bottom of the page, then **Confirm**. The app
-   restarts; give it a minute.
+6. Do **not** add `AUTH_ENFORCE`. That is step 5.
+7. **Apply** at the bottom of the page, then **Confirm**. The app restarts,
+   30–60 seconds.
 
-Check:
+The PINs take their values from check-in, so staff have one PIN and not two.
+Both are already set there: **vercel.com** → **cse-checkin** → **Settings** →
+**Environment Variables** → the eye icon on `DESK_PIN`, then `ADMIN_PIN`.
 
-9. Open `https://cvmeasurements-api.azurewebsites.net/api/health`.
-10. You want `"ok": true`, `"pin_login_ready": true`, and
-    `"auth_enforced": false`.
+> **You cannot verify this step yet, and that is expected.** `/api/health`
+> still reports `auth_enabled` — the *old* field — because the code that
+> knows about PINs is not deployed. Verification happens at step 2.
+
+---
+
+## Step 2 — Deploy the backend by itself
+
+The API and the frontend are in one repo, but they do not have to ship
+together: the Azure workflow has a `workflow_dispatch` trigger with no branch
+condition, so it can be run against the feature branch. Vercel only builds
+production from `main`, so production stays on the old frontend throughout.
+
+This is what makes the rest low-risk — it puts the new API in front of the
+*current* station before anything user-facing changes.
+
+1. **github.com/cseval/CSE_cvmeasurements** → **Actions** tab.
+2. In the left sidebar click **Build and deploy Python app to Azure Web App -
+   cvmeasurements-api**.
+3. On the right, **Run workflow** ▾.
+4. In the **Use workflow from** dropdown choose **feature/pin-login**.
+5. Click the green **Run workflow**.
+6. Wait for the green tick — a few minutes.
+
+**The live station keeps working.** The new backend accepts anonymous
+requests until `AUTH_ENFORCE` is set, so the old frontend — which sends a
+station key the server no longer requires — carries on exactly as before.
+
+### Now verify
+
+Open `https://cvmeasurements-api.azurewebsites.net/api/health`. The shape
+changes; that is how you know the new code is live:
+
+- `"ok": true`
+- `"pin_login_ready": true` ← the PINs from step 1 are usable
+- `"auth_enforced": false` ← still open, correct for now
+- a `"login_guard"` block
+- `auth_enabled` is **gone**, replaced by `station_key_enabled`
 
 If `pin_login_ready` is `false`, read `pin_login_problems` in the same
-response — it names what is wrong (not set, not 6 digits, or the two PINs are
-identical). Nothing has changed for the station either way.
+response — it names the fault: not set, not exactly 6 digits, or the two PINs
+identical.
 
-### Dry run on the preview, before touching production
+### Dry run the new frontend, without touching production
 
-Pushing `feature/pin-login` gave Vercel a preview build of the new frontend,
-pointed at the real API. Once the PINs are set, that preview is a complete
-rehearsal of step 2 that production cannot see:
+Pushing `feature/pin-login` gave Vercel a preview build. With the new backend
+now live, that preview is a complete rehearsal on a URL production cannot
+see:
 
 ```
 https://cv-measurements-git-feature-pin-login-college-sports-evaluation.vercel.app
 ```
 
-Open it, sign in with the desk PIN, and confirm you land in the app. The
-production station is untouched and still running the old build throughout.
+Open it, sign in with the desk PIN, land in the app. Meanwhile the real
+station is still on the old build and still working.
 
-One caution: this is the **real database**. Resolving a tap writes a real
-`scan_event`, and saving writes a real trial. Sign in and look around; use
-Test Mode if you want to exercise the camera without attaching anything.
+⚠️ This is the **real database**. Resolving a tap writes a real `scan_event`;
+saving writes a real trial. Use Test Mode to exercise the camera without
+attaching anything to a subject.
 
 ---
 
-## Step 2 — Merge and let both sides deploy
+## Step 3 — Merge, and put the new frontend live
 
-The API and the frontend live in the same repo and both deploy from `main`,
-so this is one push.
-
-In PowerShell, from `C:\Users\BrodeMcDonald\Projects\Lab Projects\apps\CSE_cvmeasurement`:
+Only now, and only because step 2 proved the API half works.
 
 ```powershell
+cd "C:\Users\BrodeMcDonald\Projects\Lab Projects\apps\CSE_cvmeasurement"
+git push                         # make sure the branch is current on origin
 git checkout main
 git pull
 git merge feature/pin-login
 git push
 ```
 
-Then watch both land:
+That push re-runs the Azure workflow (deploying the same code again, a no-op
+in effect) and triggers the Vercel production build.
 
-1. **github.com/cseval/CSE_cvmeasurements** → **Actions** tab. The top run is
-   **Build and deploy Python app to Azure Web App - cvmeasurements-api**.
-   Wait for the green tick — a few minutes.
-2. **vercel.com** → the CV measurement project → **Deployments** → wait for
-   **Ready**.
+1. **vercel.com** → **cv-measurements** → **Deployments** → wait for **Ready**
+   on the `main` deployment.
+2. Open `https://cv-measurements.vercel.app`. You should get the **CV Lab**
+   PIN screen.
+3. Sign in with the desk PIN.
+4. Tap a bracelet and confirm a normal resolve.
 
-Vercel is usually faster than Azure. If you open the station in that gap you
-may get *"That PIN was not recognised"* because the old API has no
-`/api/login` yet. Wait for the Actions run to go green, then reload.
-
-Check:
-
-3. Open the station URL. You should get the **CV Lab** PIN screen.
-4. Tap the PIN box, key in the desk PIN. You should land in the app.
-5. Tap a bracelet and confirm a normal resolve.
-
-**To roll back**, Vercel → **Deployments** → the previous **Ready** deployment
-→ **⋯** → **Promote to Production**. The API is still accepting anonymous
-requests at this point, so the old frontend works again immediately.
+**To roll back**, Vercel → **Deployments** → the previous **Ready**
+deployment → **⋯** → **Promote to Production**. The API still accepts
+anonymous requests, so the old frontend works again immediately. Seconds, not
+a redeploy.
 
 ---
 
-## Step 3 — Run a real session before closing the door
+## Step 4 — Run a real session before closing the door
 
 Use it for an actual session. You are checking that:
 
-- the PIN screen comes up on a cold start;
-- a bracelet tapped **at the PIN screen** does nothing — and no entry for it
-  appears in the station audit;
+- the PIN screen comes up on a cold start (force-quit Safari on the iPad and
+  reopen);
+- a bracelet tapped **while the PIN screen is up** does nothing, and no entry
+  for it appears in the station audit afterwards;
 - after signing in, taps and measurements behave exactly as before;
 - the session is still alive at the end of the shift.
 
-The setup screen will show a warning the whole time saying the API still
-accepts requests with no login. That is true, and it goes away at step 4.
+The setup screen shows a warning the whole time saying the API still accepts
+requests with no login. That is true, and step 5 clears it.
 
 ---
 
-## Step 4 — Close the door
-
-This is the step that actually turns the auth on.
+## Step 5 — Close the door
 
 1. **portal.azure.com** → **cvmeasurements-api** → **Settings** →
    **Environment variables**.
-2. **+ Add**. **Name:** `AUTH_ENFORCE` — **Value:** `true`. Click **Apply**.
+2. **+ Add** → **Name:** `AUTH_ENFORCE`, **Value:** `true` → **Apply**.
 3. **Apply** at the bottom, then **Confirm**. Wait for the restart.
-4. Reload `/api/health`: `"auth_enforced"` should now be `true`.
-5. Open the station URL in a **private/incognito window**. You should get the
-   PIN screen and be unable to get past it without the PIN.
-6. The warning on the setup screen should be gone.
 
-**To roll back**, change `AUTH_ENFORCE` to `false` and Apply. No deploy, no
-merge, about ninety seconds. That is the entire reason the flag exists.
+Verify:
+
+4. Reload `/api/health` → `"auth_enforced": true`.
+5. Open `https://cv-measurements.vercel.app` in a **private/incognito
+   window** — PIN screen, and no way past it without the PIN.
+6. The warning on the setup screen is gone.
+7. A station already signed in keeps working; its session is still valid.
+
+**To roll back**, set `AUTH_ENFORCE` to `false` and Apply. Ninety seconds, no
+merge, no deploy. That is the entire reason the flag exists.
 
 ---
 
-## Step 5 — Check-in's brute-force guard
+## Step 6 — Check-in's brute-force guard
 
 Separate repo, separate deploy, and it can be done at any point — it does
 not interact with the steps above.
@@ -207,9 +242,9 @@ right is not slowed down at all; what now costs something is repetition.
 
 ---
 
-## Step 6 — Take the scaffolding out (not urgent, don't skip)
+## Step 7 — Take the scaffolding out (not urgent, don't skip)
 
-Once step 4 has been stable for a few sessions, one more small change
+Once step 5 has been stable for a few sessions, one more small change
 removes the transitional paths, so nobody later mistakes them for features:
 
 - drop the `AUTH_ENFORCE` grace branch from `require_session`
@@ -233,7 +268,7 @@ whole time `auth_enforced` is false, which is there to stop exactly that.
 | Every PIN rejected right after a deploy | The database password was rotated — it is part of the signing key | Everyone signs in again. Expected, not a fault |
 | *"Too many wrong PINs"* | The brute-force lockout, 10 failures in 15 minutes from one address | Wait it out, or restart the App Service to clear it |
 | Station shows the PIN screen mid-shift | The session expired or was rejected | Sign in again. **Nothing is lost** — captures taken while signed out sit in the local queue and send themselves after the login |
-| Browser console shows CORS errors | `ALLOWED_ORIGINS` does not exactly match the site's origin | Step 1 item 6. No trailing slash |
+| Browser console shows CORS errors | `ALLOWED_ORIGINS` does not exactly match the site's origin | Step 1 item 5. No trailing slash |
 | Queue shows items "waiting for login" | Working as intended | They go out on the next sign-in |
 
 One thing worth being clear about, because it is the question staff will ask:

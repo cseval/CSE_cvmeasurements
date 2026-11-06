@@ -51,7 +51,7 @@ added files sitting uncommitted. Commit before testing, so a bad live run is
 one `git checkout` away from being undone.
 
 ```bash
-cd "/c/Users/BrodeMcDonald/Projects/Lab Projects/cse-lab-pipeline/apps/cv-measurement-nfc-rebuild"
+cd "/c/Users/BrodeMcDonald/Projects/Lab Projects/apps/CSE_cvmeasurement"
 
 git status                       # sanity check: should be on ...-clean
 # src/components/AthleteSelect.jsx should already be deleted; it was the

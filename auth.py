@@ -20,12 +20,23 @@ password, so:
   - nothing extra has to be configured to sign sessions, and
   - changing either PIN logs every device out on the next deploy.
 
-A consequence worth knowing: CV and check-in use different database
-accounts (`integration` vs `cse_integration`), so their signing keys differ
-and a token from one app will not verify in the other. The operator types
-the same PIN into both apps and gets a separate session in each. That is
-the intended behaviour — one compromised session does not open both — but
-it is not single sign-on, and nobody should expect it to be.
+A consequence worth knowing, because it decides something user-visible:
+the signing key includes DB_PASSWORD, so whether a token from check-in also
+works here depends entirely on whether the two apps are configured with the
+SAME database account.
+
+  - different accounts -> different keys -> a separate sign-in per app
+  - the same account   -> the same key   -> one sign-in covers both
+
+Neither is wrong, but they are different products and the difference should
+be deliberate rather than discovered. As of 2026-11-06 this is unverified:
+documentation/RUNBOOK.md records CV as `cse_integration`, which would make
+the keys identical, while the account actually set on the App Service has
+not been read back. Check the App Service's DB_USER against check-in's
+before telling anyone this is or is not single sign-on.
+
+Either way, nothing here leaks across: the token still carries only a role
+and an expiry, and a session is still revoked everywhere by changing a PIN.
 
 Prototype scope, inherited from check-in's decision of 2026-09-30: unlimited
 PIN attempts, no lockout. Revisit before wider use; a 6-digit PIN with no

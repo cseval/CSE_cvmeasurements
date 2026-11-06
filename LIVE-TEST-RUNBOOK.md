@@ -84,7 +84,8 @@ Backend:
   /api/capture/photo, GET /api/station/audit.
 - A capture may carry raw_uid instead of subject_id, so a station with no
   network can still measure and resolve at sync time.
-- X-Station-Key auth and a real CORS allowlist, replacing no auth and "*".
+- The shared desk/admin PIN login and a real CORS allowlist, replacing no
+  auth and "*".
 - All measurements stored as DECIMAL centimetres; marker_cm validated.
 
 Frontend:
@@ -182,7 +183,9 @@ pip install -r requirements.txt
 
 cp .env.example .env
 # Fill in: DB_HOST, DB_USER, DB_PASSWORD, DB_NAME=new_lab_pipeline
-# Set STATION_API_KEYS to something — anything — so auth is on for the test.
+# Set DESK_PIN and ADMIN_PIN to two different 6-digit numbers.
+# Set AUTH_ENFORCE=true, so the test exercises the login rather than
+#   the rollout grace window.
 # Set ALLOWED_ORIGINS=https://localhost:5173
 
 uvicorn server:app --reload --port 8000
@@ -224,7 +227,6 @@ Reader plugged into the laptop, laptop webcam as the camera, everything on
 ```bash
 # .env.local in the repo root
 VITE_API_URL=http://localhost:8000
-VITE_STATION_KEY=<one of the STATION_API_KEYS values>
 ```
 
 ```bash
@@ -245,7 +247,6 @@ iPad-specific items applies.
 ```bash
 # .env.local
 VITE_API_URL=https://<your-laptop-lan-ip>:8000
-VITE_STATION_KEY=<one of the STATION_API_KEYS values>
 ```
 
 The iPad has to reach your laptop, so `localhost` will not do — use the LAN

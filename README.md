@@ -168,7 +168,7 @@ the expensive way. Each one has a test.
 | 1 | Second visit overwrote the first | Every save creates a **new** `capture_trial`. Longitudinal history works. |
 | 2 | Names denormalized into the measurement row | No identity column exists to write to. |
 | 3 | Lossy unit mixing (height as a string in cm, wingspan rounded to a whole inch) | All `DECIMAL` centimetres. Converted to ft/in at render only. |
-| 4 | Zero auth, CORS `*` | `X-Station-Key` on every endpoint, `ALLOWED_ORIGINS` on CORS. |
+| 4 | Zero auth, CORS `*` | The shared 6-digit PIN login (`DESK_PIN` / `ADMIN_PIN`), the same one the check-in desk uses, on every endpoint except health, login and the marker images. `ALLOWED_ORIGINS` on CORS. The static `X-Station-Key` this originally shipped with was never turned on in production and is being retired. |
 | 5 | `marker_cm` client-supplied and unvalidated | Validated against published sizes server-side, shown persistently on the capture screen, and stored with `px_per_cm` so a bad shift can be rescaled rather than remeasured. Implausible values raise a `scale_warning`. |
 | 6 | Fully online | Local-first queue with retry and CSV export. |
 | 7 | README stale on deployment | This file. The code calls `${VITE_API_URL}/api/...`; there is no Vercel rewrite. |
@@ -237,12 +237,16 @@ npm run build
 
 ```
 VITE_API_URL=https://your-api.azurewebsites.net
-VITE_STATION_KEY=<one of STATION_API_KEYS>
 ```
 
-`VITE_STATION_KEY` is baked into the bundle, so it is not a secret from anyone
-holding the iPad. It is a gate against the open internet, which is a strict
-improvement on having none.
+That is the only frontend variable. There is no key in the bundle any more:
+the operator signs in with the shared desk PIN and the browser holds a signed
+session token until the end of the day. `VITE_STATION_KEY` is gone — it was a
+build-time constant readable by anyone who loaded the page, identical on every
+station, and unchangeable without a redeploy.
+
+The PINs live on the **server** (`DESK_PIN`, `ADMIN_PIN` on the App Service),
+never in the frontend. Changing either one signs every device out.
 
 ### Tests
 

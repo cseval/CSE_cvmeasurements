@@ -71,9 +71,17 @@ it to sign in against.
 5. Click **+ Add** again. **Name:** `ADMIN_PIN` — **Value:** the 6-digit admin
    PIN. Click **Apply**.
 6. Check **ALLOWED_ORIGINS** in the same list. If it is missing or empty,
-   click **+ Add**, **Name:** `ALLOWED_ORIGINS`, **Value:** the station's
-   Vercel URL exactly, e.g. `https://cvmeasurement.vercel.app` — no trailing
-   slash. Empty means CORS falls back to `*`.
+   click **+ Add**, **Name:** `ALLOWED_ORIGINS`, and set the value to BOTH
+   the production origin and the feature branch's preview origin, comma
+   separated, no trailing slashes:
+
+   ```
+   https://cv-measurements.vercel.app,https://cv-measurements-git-feature-pin-login-college-sports-evaluation.vercel.app
+   ```
+
+   The preview origin is in there so the dry run below works. Trim it back to
+   the production origin alone at step 6. Leaving the variable empty means
+   CORS falls back to `*`, which is what it does today.
 7. Do **not** add `AUTH_ENFORCE` yet. That is step 4.
 8. Click **Apply** at the bottom of the page, then **Confirm**. The app
    restarts; give it a minute.
@@ -87,6 +95,23 @@ Check:
 If `pin_login_ready` is `false`, read `pin_login_problems` in the same
 response — it names what is wrong (not set, not 6 digits, or the two PINs are
 identical). Nothing has changed for the station either way.
+
+### Dry run on the preview, before touching production
+
+Pushing `feature/pin-login` gave Vercel a preview build of the new frontend,
+pointed at the real API. Once the PINs are set, that preview is a complete
+rehearsal of step 2 that production cannot see:
+
+```
+https://cv-measurements-git-feature-pin-login-college-sports-evaluation.vercel.app
+```
+
+Open it, sign in with the desk PIN, and confirm you land in the app. The
+production station is untouched and still running the old build throughout.
+
+One caution: this is the **real database**. Resolving a tap writes a real
+`scan_event`, and saving writes a real trial. Sign in and look around; use
+Test Mode if you want to exercise the camera without attaching anything.
 
 ---
 

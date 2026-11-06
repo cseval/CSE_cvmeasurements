@@ -1615,3 +1615,55 @@ h1, h2, h3 {
   .form-input { min-height: 52px; font-size: 17px; }
   .measurement-card { padding: 20px; }
 }
+
+/* ------------------------------------------------------------ PIN login */
+
+.pin-screen {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+}
+
+.pin-card {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  text-align: center;
+}
+
+.pin-title {
+  margin: 0;
+  font-size: 30px;
+  letter-spacing: 0.02em;
+}
+
+.pin-sub {
+  margin: 0;
+  opacity: 0.75;
+  font-size: 15px;
+}
+
+/* The field is the focus of the screen, so it is bigger than elsewhere and
+   the dots are spaced out enough to count at a glance. */
+.pin-card .vk-field {
+  font-size: 30px;
+  letter-spacing: 0.35em;
+  text-align: center;
+  justify-content: center;
+  padding: 14px 12px;
+}
+
+.pin-submit {
+  margin-top: 4px;
+}
+
+.pin-foot {
+  margin: 4px 0 0;
+  font-size: 12px;
+  opacity: 0.6;
+}

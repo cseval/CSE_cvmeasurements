@@ -145,6 +145,10 @@ export function VKField({
   disabled = false,
   hint,
   className = '',
+  // Render the value as dots. Display only — the registry entry below still
+  // carries the real string, so the keypad appends to the PIN rather than to
+  // a row of bullets.
+  mask = false,
 }) {
   // Pulled out individually because `kb` itself is a new object on every open
   // and close — it carries `active` — while these two are useCallback([]) and
@@ -154,7 +158,7 @@ export function VKField({
 
   const elRef = useRef(null)
   const entryRef = useRef(null)
-  entryRef.current = { name, label, value, onChange, variant, maxLength, disabled, elRef }
+  entryRef.current = { name, label, value, onChange, variant, maxLength, disabled, mask, elRef }
 
   // Registration happens in three places, and the split matters.
   //
@@ -202,7 +206,11 @@ export function VKField({
         onClick={() => { if (!disabled) kb.open(name) }}
       >
         {value !== '' && value != null
-          ? <span className="vk-field-value">{value}</span>
+          ? (
+            <span className={'vk-field-value' + (mask ? ' vk-field-masked' : '')}>
+              {mask ? '\u2022'.repeat(String(value).length) : value}
+            </span>
+          )
           : <span className="vk-field-placeholder">{placeholder || '—'}</span>}
         {isActive && <span className="vk-caret" aria-hidden="true" />}
       </div>
@@ -298,7 +306,13 @@ export default function VirtualKeyboard({ kb }) {
       <div className="vk-panel" ref={panelRef} role="group" aria-label="On-screen keyboard">
         <div className="vk-bar">
           <span className="vk-bar-label">{entry.label || entry.name}</span>
-          <span className="vk-bar-value">{value || '—'}</span>
+          {/* The panel echoes the field, so it has to mask like the field.
+              Masking only the field leaves the PIN in plain text here, which
+              is the half of the screen an operator is looking at while they
+              type it. */}
+          <span className="vk-bar-value">
+            {value ? (entry.mask ? '\u2022'.repeat(String(value).length) : value) : '—'}
+          </span>
           <button
             type="button"
             className="vk-bar-close"

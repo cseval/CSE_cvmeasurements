@@ -19,7 +19,7 @@ import VirtualKeyboard, { VKField, useVirtualKeyboard } from '../shared/VirtualK
  * in — which is how the station runs — iOS hides the software keyboard, and
  * the operator name is required, so this screen could not be completed at all.
  */
-export default function StationSetup({ config, onChange, onDone, canSkip }) {
+export default function StationSetup({ config, onChange, onDone, canSkip, onSignOut }) {
   const [draft, setDraft] = useState(config)
   const [stations, setStations] = useState([])
   const [sessions, setSessions] = useState([])
@@ -80,10 +80,19 @@ export default function StationSetup({ config, onChange, onDone, canSkip }) {
             {health.database_error ? `: ${health.database_error}` : ''}.
           </div>
         )}
-        {health?.ok && !health.auth_enabled && (
+        {health?.ok && health.auth_enforced === false && (
           <div className="warn-card">
-            This API is running without a station key. Set STATION_API_KEYS on
-            the server before it is reachable from outside the lab.
+            This API is still accepting requests with no login. That is the
+            rollout setting, not the finished state — set AUTH_ENFORCE=true on
+            the server once every station is signing in.
+          </div>
+        )}
+        {health?.ok && health.pin_login_ready === false && (
+          <div className="warn-card">
+            PIN login is not usable on the server
+            {health.pin_login_problems?.length
+              ? `: ${health.pin_login_problems.join('; ')}`
+              : '.'}
           </div>
         )}
 
@@ -225,6 +234,18 @@ export default function StationSetup({ config, onChange, onDone, canSkip }) {
         </button>
         {canSkip && (
           <button className="adjust-btn" onClick={onDone}>Cancel</button>
+        )}
+        {onSignOut && (
+          // Ends the session on this device only. Anything already measured
+          // is in the local queue and goes out on the next login — signing
+          // out is not a way to lose a capture.
+          <button
+            className="adjust-btn"
+            onMouseDown={e => e.preventDefault()}
+            onClick={onSignOut}
+          >
+            Sign out
+          </button>
         )}
       </div>
     </div>

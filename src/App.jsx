@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import AdditionalInfo from './components/AdditionalInfo.jsx'
+import PinLogin from './components/PinLogin.jsx'
 import Camera from './components/Camera.jsx'
 import Instructions from './components/Instructions.jsx'
 import Results from './components/Results.jsx'
@@ -8,6 +9,7 @@ import StationSetup from './components/StationSetup.jsx'
 import TapIdle from './components/TapIdle.jsx'
 import useTapReader from './hooks/useTapReader.jsx'
 import { fetchAudit, measure, resolveTap } from './lib/api.js'
+import { isLoggedIn, logout, subscribe as subscribeAuth } from './lib/auth.js'
 import * as queue from './lib/queue.js'
 import { isConfigured, loadConfig, saveConfig } from './lib/station.js'
 import { isNetworkFailure, validateUid } from './lib/tap.js'
@@ -24,6 +26,12 @@ import './App.css'
  * There is no athlete-select screen and no roster. The event/roster picker is
  * gone: an athlete arrives, taps, and the app knows a subject token. It never
  * knows a name.
+ *
+ * The PIN screen sits in front of all of it and is not part of the machine:
+ * it can appear over any screen the moment a session expires, and when it
+ * clears, the operator is back exactly where they were. Losing a session
+ * mid-measurement must not lose the measurement — the queue holds captures
+ * with no session at all, and sends them once someone logs back in.
  */
 export default function App() {
   const [config, setConfig] = useState(loadConfig)
@@ -52,6 +60,21 @@ export default function App() {
   const screenRef = useRef(screen)
   useEffect(() => { screenRef.current = screen }, [screen])
 
+  // --------------------------------------------------------------- session
+
+  const [signedIn, setSignedIn] = useState(isLoggedIn)
+  const signedInRef = useRef(signedIn)
+  useEffect(() => { signedInRef.current = signedIn }, [signedIn])
+
+  useEffect(() => {
+    // Two ways a session ends, and only one of them is an event. A logout or
+    // a 401 writes to the store and fires this; simply running out does not,
+    // so it is also polled. A station left idle overnight has to notice.
+    const unsub = subscribeAuth(() => setSignedIn(isLoggedIn()))
+    const id = setInterval(() => setSignedIn(isLoggedIn()), 30_000)
+    return () => { unsub(); clearInterval(id) }
+  }, [])
+
   // ---------------------------------------------------------------- sync
 
   useEffect(() => queue.startSync(), [])
@@ -72,7 +95,13 @@ export default function App() {
   const handleTap = useCallback(async (raw) => {
     const current = screenRef.current
 
-    // Setup and the audit view are the only screens where a tap is meaningless.
+    // A tap at the login screen is meaningless, and worse than meaningless:
+    // resolving it would write a scan_event that produced no data, and the
+    // station audit would report it as a bracelet that failed to measure.
+    if (!signedInRef.current) return
+
+    // Setup and the audit view are the only other screens where a tap does
+    // nothing.
     if (current === 'setup' || current === 'audit') return
 
     // A tap arriving mid-flow is held, not acted on. Invariant 5: a trial must
@@ -285,6 +314,7 @@ export default function App() {
         canSkip={isConfigured(config)}
         onChange={next => { setConfig(next); saveConfig(next) }}
         onDone={() => setScreen(isConfigured(config) ? 'idle' : 'instructions')}
+        onSignOut={() => { logout(); setScreen('idle') }}
       />
     )
   } else if (screen === 'instructions') {
@@ -359,12 +389,23 @@ export default function App() {
 
   return (
     <>
-      {/* Mounted at the root, on every screen, always. Invariant 1: if this
-          unmounts or loses focus, the next tap goes nowhere and looks like a
-          hardware failure to staff. */}
+      {/* Mounted at the root, on every screen, always — the login screen
+          included. Invariant 1: if this unmounts or loses focus, the next tap
+          goes nowhere and looks like a hardware failure to staff. Taps are
+          ignored while signed out, but the reader stays attached, so the first
+          tap after a login works without anyone re-seating anything. */}
       <TapCatcher />
-      {pendingBanner}
-      {body}
+      {signedIn ? (
+        <>
+          {pendingBanner}
+          {body}
+        </>
+      ) : (
+        // Rendered over whatever screen was up, not instead of the machine:
+        // `screen` is untouched, so a session that runs out mid-measurement
+        // returns the operator to the same step.
+        <PinLogin onLoggedIn={() => setSignedIn(true)} />
+      )}
     </>
   )
 }

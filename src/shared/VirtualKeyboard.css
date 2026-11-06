@@ -273,3 +273,9 @@
   .vk-key { min-height: 38px; font-size: 17px; }
   .vk-spacer { height: 56vh; }
 }
+
+/* Masked value (the PIN field). Dots only; the real string stays in the
+   keyboard's registry, never on screen. */
+.vk-field-masked {
+  letter-spacing: 0.35em;
+}

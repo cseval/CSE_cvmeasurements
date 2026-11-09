@@ -563,3 +563,25 @@ def test_health_reports_guard_counts_and_no_addresses(monkeypatch):
     r = client.get("/api/health")
     assert r.json()["login_guard"]["locked_out"] >= 1
     assert "203.0.113.7" not in r.text, "health must not name who is locked out"
+
+
+def test_the_live_deploy_window_does_not_lock_the_station_out(monkeypatch):
+    """
+    The literal App Service configuration while the merge is landing: PINs
+    set, STATION_API_KEYS empty (as it has always been), AUTH_ENFORCE absent.
+
+    The frontend that is live at that moment still sends X-Station-Key and no
+    Authorization. If that combination 401s, merging takes the station down
+    for however long the Azure deploy takes — so it is asserted rather than
+    reasoned about.
+    """
+    _, client = _app(monkeypatch, DESK_PIN=DESK, ADMIN_PIN=ADMIN,
+                     DB_PASSWORD="p", AUTH_ENFORCE=None, STATION_API_KEYS=None)
+    old_bundle = {"X-Station-Key": "whatever-is-baked-into-the-current-build"}
+    for method, path in GUARDED:
+        r = _call(client, method, path, headers=old_bundle)
+        assert r.status_code not in (401, 403), \
+            f"{path} would have locked the live station out ({r.status_code})"
+
+    # And the new bundle can sign in against the same configuration.
+    assert client.post("/api/login", json={"pin": DESK}).status_code == 200
